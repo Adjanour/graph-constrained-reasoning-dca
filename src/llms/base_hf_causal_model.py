@@ -19,7 +19,9 @@ class HfCausalModel(BaseLanguageModel):
         parser.add_argument(
             "--model_path", type=str, help="HUGGING FACE MODEL or model path"
         )
-        parser.add_argument("--maximun_token", type=int, help="max length", default=4096)
+        parser.add_argument(
+            "--maximun_token", type=int, help="max length", default=4096
+        )
         parser.add_argument(
             "--max_new_tokens", type=int, help="max length", default=1024
         )
@@ -35,14 +37,32 @@ class HfCausalModel(BaseLanguageModel):
             "--generation_mode",
             type=str,
             default="greedy",
-            choices=["greedy", "beam", "sampling", "group-beam", "beam-early-stopping", "group-beam-early-stopping"],
+            choices=[
+                "greedy",
+                "beam",
+                "sampling",
+                "group-beam",
+                "beam-early-stopping",
+                "group-beam-early-stopping",
+            ],
         )
         parser.add_argument(
             "--k", type=int, default=1, help="number of paths to generate"
         )
-        parser.add_argument("--chat_model", default='true', type=lambda x: (str(x).lower() == 'true'))
-        parser.add_argument("--use_assistant_model", default='false', type=lambda x: (str(x).lower() == 'true'))
-        parser.add_argument("--assistant_model_path", type=str, help="HUGGING FACE MODEL or model path", default=None)
+        parser.add_argument(
+            "--chat_model", default="true", type=lambda x: str(x).lower() == "true"
+        )
+        parser.add_argument(
+            "--use_assistant_model",
+            default="false",
+            type=lambda x: str(x).lower() == "true",
+        )
+        parser.add_argument(
+            "--assistant_model_path",
+            type=str,
+            help="HUGGING FACE MODEL or model path",
+            default=None,
+        )
 
     def __init__(self, args):
         self.args = args
@@ -85,10 +105,17 @@ class HfCausalModel(BaseLanguageModel):
         except:
             # Load from PeftModel
             sft_peft_config = PeftConfig.from_pretrained(self.args.model_path)
-            self.generation_cfg = GenerationConfig.from_pretrained(sft_peft_config.base_model_name_or_path)
-            
+            self.generation_cfg = GenerationConfig.from_pretrained(
+                sft_peft_config.base_model_name_or_path
+            )
+
         self.generation_cfg.max_new_tokens = self.args.max_new_tokens
         self.generation_cfg.return_dict_in_generate = (True,)
+
+        # Suppress warnings: clear sampling-only params when using greedy/beam
+        self.generation_cfg.temperature = None
+        self.generation_cfg.top_p = None
+        self.generation_cfg.top_k = None
 
         if self.args.generation_mode == "greedy":
             self.generation_cfg.do_sample = False
@@ -110,24 +137,24 @@ class HfCausalModel(BaseLanguageModel):
             self.generation_cfg.num_beams = self.args.k
             self.generation_cfg.num_return_sequences = self.args.k
             self.generation_cfg.num_beam_groups = self.args.k
-            self.generation_cfg.diversity_penalty = 1.
+            self.generation_cfg.diversity_penalty = 1.0
         elif self.args.generation_mode == "group-beam-early-stopping":
             self.generation_cfg.do_sample = False
             self.generation_cfg.num_beams = self.args.k
             self.generation_cfg.num_return_sequences = self.args.k
             self.generation_cfg.num_beam_groups = self.args.k
             self.generation_cfg.early_stopping = True
-            self.generation_cfg.diversity_penalty = 1.
+            self.generation_cfg.diversity_penalty = 1.0
 
     def prepare_model_prompt(self, query):
         if self.args.chat_model:
-            chat_query = [
-                {"role": "user", "content": query}
-            ]
-            return self.tokenizer.apply_chat_template(chat_query, tokenize=False, add_generation_prompt=True)
+            chat_query = [{"role": "user", "content": query}]
+            return self.tokenizer.apply_chat_template(
+                chat_query, tokenize=False, add_generation_prompt=True
+            )
         else:
             return query
-    
+
     @torch.inference_mode()
     def generate_sentence(self, llm_input, *args, **kwargs):
         # outputs = self.generator(
@@ -139,25 +166,32 @@ class HfCausalModel(BaseLanguageModel):
         #     assistant_model = self.assistant_model
         # )
         # return outputs[0]["generated_text"].strip()  # type: ignore
-        inputs = self.tokenizer(llm_input, return_tensors="pt", add_special_tokens=False)
+        inputs = self.tokenizer(
+            llm_input, return_tensors="pt", add_special_tokens=False
+        )
         input_ids = inputs.input_ids.to(self.model.device)
         attention_mask = inputs.attention_mask.to(self.model.device)
         try:
             res = self.model.generate(
-                input_ids = input_ids,
-                attention_mask = attention_mask,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
                 generation_config=self.generation_cfg,
                 return_dict_in_generate=True,
-                pad_token_id=self.tokenizer.eos_token_id
+                pad_token_id=self.tokenizer.eos_token_id,
             )
         except Exception as e:
             print(e)
             return None
         response = []
         if len(res.sequences) == 1:
-            return self.tokenizer.decode(res.sequences[0][input_ids.shape[1]:],skip_special_tokens=True)
+            return self.tokenizer.decode(
+                res.sequences[0][input_ids.shape[1] :], skip_special_tokens=True
+            )
         else:
             for r in res.sequences:
-                response.append(self.tokenizer.decode(r[input_ids.shape[1]:], 
-            skip_special_tokens=True))
+                response.append(
+                    self.tokenizer.decode(
+                        r[input_ids.shape[1] :], skip_special_tokens=True
+                    )
+                )
             return response
