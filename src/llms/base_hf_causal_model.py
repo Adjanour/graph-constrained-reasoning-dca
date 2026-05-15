@@ -1,4 +1,4 @@
-from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 import torch
 import importlib
 from .base_language_model import BaseLanguageModel
@@ -76,26 +76,40 @@ class HfCausalModel(BaseLanguageModel):
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.args.model_path, token=HF_TOKEN, trust_remote_code=True
         )
+        # Override the model config's attention implementation to match what's available.
+        # The pretrained config may request flash_attention_2 but we fall back to sdpa
+        # if flash-attn is not installed.
+        model_config = AutoConfig.from_pretrained(
+            self.args.model_path, token=HF_TOKEN, trust_remote_code=True
+        )
+        attn = self.args.attn_implementation
+        if attn == "flash_attention_2" and importlib.util.find_spec("flash_attn") is None:
+            attn = "sdpa"
+        model_config._attn_implementation = attn
         self.model = AutoModelForCausalLM.from_pretrained(
             self.args.model_path,
+            config=model_config,
             device_map="auto",
             token=HF_TOKEN,
             torch_dtype=self.DTYPE.get(self.args.dtype, None),
             load_in_8bit=self.args.quant == "8bit",
             load_in_4bit=self.args.quant == "4bit",
             trust_remote_code=True,
-            attn_implementation=self.args.attn_implementation,
         )
         if self.args.use_assistant_model:
+            assist_config = AutoConfig.from_pretrained(
+                self.args.assistant_model_path, token=HF_TOKEN, trust_remote_code=True
+            )
+            assist_config._attn_implementation = attn
             self.assistant_model = AutoModelForCausalLM.from_pretrained(
                 self.args.assistant_model_path,
+                config=assist_config,
                 device_map="auto",
                 token=HF_TOKEN,
                 torch_dtype=self.DTYPE.get(self.args.dtype, None),
                 load_in_8bit=self.args.quant == "8bit",
                 load_in_4bit=self.args.quant == "4bit",
                 trust_remote_code=True,
-            attn_implementation=self.args.attn_implementation if self.args.attn_implementation != "flash_attention_2" or importlib.util.find_spec("flash_attn") is not None else "sdpa",
             )
         else:
             self.assistant_model = None
