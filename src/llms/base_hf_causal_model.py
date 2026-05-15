@@ -1,5 +1,6 @@
 from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 import torch
+import importlib
 from .base_language_model import BaseLanguageModel
 import os
 import dotenv
@@ -94,7 +95,7 @@ class HfCausalModel(BaseLanguageModel):
                 load_in_8bit=self.args.quant == "8bit",
                 load_in_4bit=self.args.quant == "4bit",
                 trust_remote_code=True,
-                attn_implementation=self.args.attn_implementation,
+            attn_implementation=self.args.attn_implementation if self.args.attn_implementation != "flash_attention_2" or importlib.util.find_spec("flash_attn") is not None else "sdpa",
             )
         else:
             self.assistant_model = None
