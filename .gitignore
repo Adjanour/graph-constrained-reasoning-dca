@@ -9,3 +9,16 @@ accelerate_configs/
 wandb/
 data
 results/
+
+# LaTeX build artifacts
+*.aux
+*.bak[0-9]*
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.pdf
+*.toc
+indent.log
