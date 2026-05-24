@@ -1,0 +1,404 @@
+\begin{thebibliography}{48}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Agrawal et~al.(2024)Agrawal, Kumarage, Alghamdi, and
+  Liu]{agrawal2024mindfulrag}
+Garima Agrawal, Tharindu Kumarage, Zeyad Alghamdi, and Huan Liu.
+\newblock Mindful-rag: A study of points of failure in retrieval augmented
+  generation.
+\newblock In \emph{2024 2nd International Conference on Foundation and Large
+  Language Models (FLLM)}, pages 607--611, 2024.
+\newblock \doi{10.1109/FLLM63129.2024.10852457}.
+
+\bibitem[Anderson et~al.(2017)Anderson, Fernando, Johnson, and
+  Gould]{anderson2017guided}
+Peter Anderson, Basura Fernando, Mark Johnson, and Stephen Gould.
+\newblock Guided open vocabulary image captioning with constrained beam search.
+\newblock In \emph{Proceedings of the 2017 Conference on Empirical Methods in
+  Natural Language Processing}, pages 936--945. Association for Computational
+  Linguistics, 2017.
+\newblock \doi{10.18653/v1/d17-1098}.
+
+\bibitem[Asai et~al.(2024)Asai, Wu, Wang, Sil, and Hajishirzi]{asai2024selfrag}
+Akari Asai, Zeqiu Wu, Yizhong Wang, Avirup Sil, and Hannaneh Hajishirzi.
+\newblock Self-rag: Learning to retrieve, generate, and critique through
+  self-reflection.
+\newblock In \emph{International Conference on Learning Representations}, 2024.
+
+\bibitem[Bollacker et~al.(2008)Bollacker, Evans, Paritosh, Sturge, and
+  Taylor]{bollacker2008freebase}
+Kurt Bollacker, Colin Evans, Praveen Paritosh, Tim Sturge, and Jamie Taylor.
+\newblock Freebase: A collaboratively created graph database for structuring
+  human knowledge.
+\newblock In \emph{Proceedings of the 2008 ACM SIGMOD International Conference
+  on Management of Data}, pages 1247--1250, 2008.
+
+\bibitem[Brown et~al.(2020)Brown, Mann, Ryder, Subbiah, Kaplan, Dhariwal,
+  Neelakantan, Shyam, Sastry, Askell, Agarwal, Herbert-Voss, Krueger, Henighan,
+  Child, Ramesh, Ziegler, Wu, Winter, Hesse, Chen, Sigler, Litwin, Gray, Chess,
+  Clark, Berner, McCandlish, Radford, Sutskever, and Amodei]{brown2020gpt3}
+Tom Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared~D Kaplan, Prafulla
+  Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda Askell,
+  Sandhini Agarwal, Ariel Herbert-Voss, Gretchen Krueger, Tom Henighan, Rewon
+  Child, Aditya Ramesh, Daniel Ziegler, Jeffrey Wu, Clemens Winter, Chris
+  Hesse, Mark Chen, Eric Sigler, Mateusz Litwin, Scott Gray, Benjamin Chess,
+  Jack Clark, Christopher Berner, Sam McCandlish, Alec Radford, Ilya Sutskever,
+  and Dario Amodei.
+\newblock Language models are few-shot learners.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~33, pages 1877--1901. Curran Associates, Inc., 2020.
+
+\bibitem[De~Cao et~al.(2021)De~Cao, Izacard, Riedel, and
+  Petroni]{decao2021autoregressive}
+Nicola De~Cao, Gautier Izacard, Sebastian Riedel, and Fabio Petroni.
+\newblock Autoregressive entity retrieval.
+\newblock In \emph{International Conference on Learning Representations}, 2021.
+
+\bibitem[Deutsch et~al.(2019)Deutsch, Upadhyay, and
+  Roth]{deutsch2019constrained}
+Daniel Deutsch, Shyam Upadhyay, and Dan Roth.
+\newblock A general-purpose algorithm for constrained sequential inference.
+\newblock In \emph{Proceedings of the 23rd Conference on Computational Natural
+  Language Learning (CoNLL)}, pages 482--492. Association for Computational
+  Linguistics, 2019.
+
+\bibitem[Edge et~al.(2024)Edge, Trinh, Cheng, Bradley, Chao, Mody, Truitt, and
+  Larson]{edge2024graphrag}
+Darren Edge, Ha~Trinh, Newman Cheng, Joshua Bradley, Alex Chao, Apurva Mody,
+  Steven Truitt, and Jonathan Larson.
+\newblock From local to global: A graph {RAG} approach to query-focused
+  summarization.
+\newblock \emph{arXiv preprint arXiv:2404.16130}, 2024.
+
+\bibitem[Geng et~al.(2023)Geng, Josifoski, Peyrard, and
+  West]{geng2023grammarconstrained}
+Saibo Geng, Martin Josifoski, Maxime Peyrard, and Robert West.
+\newblock Grammar-constrained decoding for structured {NLP} tasks without
+  finetuning.
+\newblock In \emph{The 2023 Conference on Empirical Methods in Natural Language
+  Processing}, 2023.
+\newblock URL \url{https://openreview.net/forum?id=KkHY1WGDII}.
+
+\bibitem[He et~al.(2021)He, Lan, Jiang, Zhao, and Wen]{he2021multihop}
+Gaole He, Yunshi Lan, Jing Jiang, Wayne~Xin Zhao, and Ji-Rong Wen.
+\newblock Improving multi-hop knowledge base question answering by learning
+  intermediate supervision signals.
+\newblock In \emph{Proceedings of the 14th ACM International Conference on Web
+  Search and Data Mining (WSDM)}, pages 553--561. ACM, 2021.
+
+\bibitem[Hokamp and Liu(2017)]{hokamp2017lexically}
+Chris Hokamp and Qun Liu.
+\newblock Lexically constrained decoding for sequence generation using grid
+  beam search.
+\newblock In \emph{Proceedings of the 55th Annual Meeting of the Association
+  for Computational Linguistics (Volume 1: Long Papers)}, pages 1535--1546.
+  Association for Computational Linguistics, 2017.
+\newblock \doi{10.18653/v1/p17-1141}.
+
+\bibitem[Huang et~al.(2023)Huang, Yu, Ma, Zhong, Feng, Wang, Chen, Peng, Feng,
+  Qin, and Liu]{huang2023hallucination}
+Lei Huang, Weijiang Yu, Weitao Ma, Weihong Zhong, Zhangyin Feng, Haotian Wang,
+  Qianglong Chen, Weihua Peng, Xiaocheng Feng, Bing Qin, and Ting Liu.
+\newblock A survey on hallucination in large language models: Principles,
+  taxonomy, challenges, and open questions.
+\newblock \emph{arXiv preprint arXiv:2311.05232}, 2023.
+
+\bibitem[Ji et~al.(2023)Ji, Lee, Frieske, Yu, Su, Xu, Ishii, Bang, Madotto, and
+  Fung]{ji2023survey}
+Ziwei Ji, Nayeon Lee, Rita Frieske, Tiezheng Yu, Dan Su, Yan Xu, Etsuko Ishii,
+  Ye~Jin Bang, Andrea Madotto, and Pascale Fung.
+\newblock Survey of hallucination in natural language generation.
+\newblock \emph{ACM Comput. Surv.}, 55\penalty0 (12), March 2023.
+\newblock ISSN 0360-0300.
+\newblock \doi{10.1145/3571730}.
+
+\bibitem[Jiang et~al.(2023{\natexlab{a}})Jiang, Zhou, Dong, Ye, Zhao, and
+  Wen]{jiang2023structgpt}
+Jinhao Jiang, Kun Zhou, Zican Dong, Keming Ye, Xin Zhao, and Ji-Rong Wen.
+\newblock Structgpt: A general framework for large language model to reason
+  over structured data.
+\newblock In \emph{Proceedings of the 2023 Conference on Empirical Methods in
+  Natural Language Processing}, pages 9237--9251. Association for Computational
+  Linguistics, 2023{\natexlab{a}}.
+\newblock \doi{10.18653/v1/2023.emnlp-main.574}.
+
+\bibitem[Jiang et~al.(2023{\natexlab{b}})Jiang, Xu, Gao, Sun, Liu, Dwivedi-Yu,
+  Yang, Callan, and Neubig]{jiang2023flare}
+Zhengbao Jiang, Frank Xu, Luyu Gao, Zhiqing Sun, Qian Liu, Jane Dwivedi-Yu,
+  Yiming Yang, Jamie Callan, and Graham Neubig.
+\newblock Active retrieval augmented generation.
+\newblock In \emph{Proceedings of the 2023 Conference on Empirical Methods in
+  Natural Language Processing}, pages 7969--7992. Association for Computational
+  Linguistics, 2023{\natexlab{b}}.
+\newblock \doi{10.18653/v1/2023.emnlp-main.495}.
+
+\bibitem[Jin et~al.(2024)Jin, Liu, Han, Jiang, Ji, and Han]{jin2024graphcot}
+Bowen Jin, Gang Liu, Chi Han, Meng Jiang, Heng Ji, and Jiawei Han.
+\newblock Graph chain-of-thought: Augmenting large language models by reasoning
+  on graphs.
+\newblock In \emph{Findings of the Association for Computational Linguistics:
+  ACL 2024}, pages 163--184, 2024.
+
+\bibitem[Kandpal et~al.(2023)Kandpal, Deng, Roberts, Wallace, and
+  Raffel]{kandpal2023large}
+Nikhil Kandpal, Haikang Deng, Adam Roberts, Eric Wallace, and Colin Raffel.
+\newblock Large language models struggle to learn long-tail knowledge.
+\newblock In \emph{Proceedings of the 40th International Conference on Machine
+  Learning (ICML)}, pages 15696--15707. PMLR, 2023.
+
+\bibitem[Lan et~al.(2022)Lan, He, Jiang, Jiang, Zhao, and Wen]{lan2022kgqa}
+Yunshi Lan, Gaole He, Jinhao Jiang, Jing Jiang, Wayne~Xin Zhao, and Ji-Rong
+  Wen.
+\newblock Complex knowledge base question answering: A survey.
+\newblock \emph{arXiv preprint arXiv:2108.06688}, 2022.
+
+\bibitem[Lewis et~al.(2020)Lewis, Perez, Piktus, Petroni, Karpukhin, Goyal,
+  K\"uttler, Lewis, Yih, Rockt\"aschel, Riedel, and Kiela]{lewis2020rag}
+Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir
+  Karpukhin, Naman Goyal, Heinrich K\"uttler, Mike Lewis, Wen-tau Yih, Tim
+  Rockt\"aschel, Sebastian Riedel, and Douwe Kiela.
+\newblock Retrieval-augmented generation for knowledge-intensive {NLP} tasks.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~33, pages 9459--9474. Curran Associates, Inc., 2020.
+
+\bibitem[Li et~al.(2025)Li, Zhang, Wu, Luo, Glass, and
+  Meng]{li2024-decoding-on-graphs}
+Kun Li, Tianhua Zhang, Xixin Wu, Hongyin Luo, James~R. Glass, and Helen~M.
+  Meng.
+\newblock Decoding on graphs: Faithful and sound reasoning on knowledge graphs
+  through generation of well-formed chains.
+\newblock In \emph{Proceedings of the 63rd Annual Meeting of the Association
+  for Computational Linguistics (Volume 1: Long Papers)}, pages 24349--24364.
+  Association for Computational Linguistics, 2025.
+\newblock \doi{10.18653/v1/2025.acl-long.1186}.
+\newblock URL \url{http://dx.doi.org/10.18653/v1/2025.acl-long.1186}.
+
+\bibitem[Lin et~al.(2022)Lin, Hilton, and Evans]{lin2022truthfulqa}
+Stephanie Lin, Jacob Hilton, and Owain Evans.
+\newblock {TruthfulQA}: Measuring how models mimic human falsehoods.
+\newblock In \emph{Proceedings of the 60th Annual Meeting of the Association
+  for Computational Linguistics}, pages 3214--3252. Association for
+  Computational Linguistics, 2022.
+
+\bibitem[Lu et~al.(2021)Lu, West, Zellers, Le~Bras, Bhagavatula, and
+  Choi]{lu2021neurologic}
+Ximing Lu, Peter West, Rowan Zellers, Ronan Le~Bras, Chandra Bhagavatula, and
+  Yejin Choi.
+\newblock {NeuroLogic} decoding: (un)supervised neural text generation with
+  predicate logic constraints.
+\newblock In \emph{Proceedings of the 2021 Conference of the North American
+  Chapter of the Association for Computational Linguistics: Human Language
+  Technologies}, pages 4288--4299. Association for Computational Linguistics,
+  2021.
+
+\bibitem[Luo et~al.(2024)Luo, Li, Haffari, and Pan]{luo2024rog}
+Linhao Luo, Yuan-Fang Li, Gholamreza Haffari, and Shirui Pan.
+\newblock Reasoning on graphs: Faithful and interpretable large language model
+  reasoning.
+\newblock In \emph{International Conference on Learning Representations}, 2024.
+
+\bibitem[Luo et~al.(2025)Luo, Zhao, Haffari, Li, Gong, and
+  Pan]{luo2025-graph-constrained-reasoning}
+Linhao Luo, Zicheng Zhao, Gholamreza Haffari, Yuan-Fang Li, Chen Gong, and
+  Shirui Pan.
+\newblock Graph-constrained reasoning: Faithful reasoning on knowledge graphs
+  with large language models.
+\newblock In \emph{Proceedings of the 42nd International Conference on Machine
+  Learning}, volume 267 of \emph{Proceedings of Machine Learning Research},
+  pages 41540--41565. PMLR, 2025.
+\newblock URL \url{https://proceedings.mlr.press/v267/luo25t.html}.
+
+\bibitem[Mallen et~al.(2023)Mallen, Asai, Zhong, Das, Khashabi, and
+  Hajishirzi]{mallen2023not}
+Alex Mallen, Akari Asai, Victor Zhong, Rajarshi Das, Daniel Khashabi, and
+  Hannaneh Hajishirzi.
+\newblock When not to trust language models: Investigating effectiveness of
+  parametric and non-parametric memories.
+\newblock In \emph{Proceedings of the 61st Annual Meeting of the Association
+  for Computational Linguistics}, pages 9802--9822. Association for
+  Computational Linguistics, 2023.
+
+\bibitem[Mavromatis and Karypis(2025)]{mavromatis2024gnnrag}
+Costas Mavromatis and George Karypis.
+\newblock Gnn-rag: Graph neural retrieval for efficient large language model
+  reasoning on knowledge graphs.
+\newblock In \emph{Findings of the Association for Computational Linguistics:
+  ACL 2025}, pages 16682--16699. Association for Computational Linguistics,
+  2025.
+\newblock \doi{10.18653/v1/2025.findings-acl.856}.
+
+\bibitem[Perez et~al.(2023)Perez, Ringer, Luko{\v{s}}i={\u{t}}e, Nguyen, Chen,
+  Heiner, Pettit, Olsson, Kundu, Kadavath, Jones, Chen, Mann, Israel, Bowman,
+  Clark, Ganguli, Askell, and Hernandez]{perez2022sycophancy}
+Ethan Perez, Sam Ringer, Karin={\v{e}} Luko{\v{s}}i={\u{t}}e, Katy Nguyen,
+  Edwin Chen, Scott Heiner, Craig Pettit, Catherine Olsson, Sandipan Kundu,
+  Saurav Kadavath, Andy Jones, Anna Chen, Ben Mann, Brian Israel, Samuel~R.
+  Bowman, Jack Clark, Deep Ganguli, Amanda Askell, and Danny Hernandez.
+\newblock Discovering language model behaviors with model-written evaluations.
+\newblock In \emph{Findings of the Association for Computational Linguistics:
+  ACL 2023}, pages 13387--13434. Association for Computational Linguistics,
+  2023.
+
+\bibitem[Poesia et~al.(2022)Poesia, Polozov, Le, Tiwari, Soares, Meek, and
+  Gulwani]{poesia2022synchromesh}
+Gabriel Poesia, Oleksandr Polozov, Vu~Le, Ashish Tiwari, Gustavo Soares,
+  Christopher Meek, and Sumit Gulwani.
+\newblock Synchromesh: Reliable code generation from pre-trained language
+  models.
+\newblock In \emph{International Conference on Learning Representations}, 2022.
+
+\bibitem[Reimers and Gurevych(2019)]{reimers2019sbert}
+Nils Reimers and Iryna Gurevych.
+\newblock Sentence-{BERT}: Sentence embeddings using siamese {BERT}-networks.
+\newblock In \emph{Proceedings of the 2019 Conference on Empirical Methods in
+  Natural Language Processing (EMNLP)}, pages 3982--3992. Association for
+  Computational Linguistics, 2019.
+
+\bibitem[Saxena et~al.(2022)Saxena, Chakrabarti, and Talukdar]{saxena2022kgqa}
+Apoorv Saxena, Soumen Chakrabarti, and Partha Talukdar.
+\newblock Sequence-to-sequence knowledge graph completion and question
+  answering.
+\newblock In \emph{Proceedings of the 60th Annual Meeting of the Association
+  for Computational Linguistics}, pages 2814--2828. Association for
+  Computational Linguistics, 2022.
+
+\bibitem[Scholak et~al.(2021)Scholak, Schucher, and
+  Bahdanau]{scholak2021picard}
+Torsten Scholak, Nathan Schucher, and Dzmitry Bahdanau.
+\newblock Picard: Parsing incrementally for constrained auto-regressive
+  decoding from language models.
+\newblock In \emph{Proceedings of the 2021 Conference on Empirical Methods in
+  Natural Language Processing}. Association for Computational Linguistics,
+  2021.
+
+\bibitem[Shi et~al.(2021)Shi, Cao, Hou, Li, and Zhang]{shi2021kgpath}
+Jiabin Shi, Shulin Cao, Lei Hou, Juanzi Li, and Hanwang Zhang.
+\newblock transfernet: An effective and transparent framework for multi-hop
+  question answering over relation graph.
+\newblock In \emph{Proceedings of the 2021 Conference on Empirical Methods in
+  Natural Language Processing}, pages 4149--4158. Association for Computational
+  Linguistics, 2021.
+
+\bibitem[Sun et~al.(2024)Sun, Xu, Tang, Wang, Lin, Gong, Ni, Shum, and
+  Guo]{sun2024tog}
+Jiashuo Sun, Chengjin Xu, Lumingyuan Tang, Saizhuo Wang, Chen Lin, Yeyun Gong,
+  Lionel~M. Ni, Heung-Yeung Shum, and Jian Guo.
+\newblock Think-on-graph: Deep and responsible reasoning of large language
+  model on knowledge graph.
+\newblock In \emph{International Conference on Learning Representations}, 2024.
+
+\bibitem[Talmor and Berant(2018)]{talmor2018cwq}
+Alon Talmor and Jonathan Berant.
+\newblock The web as a knowledge-base for answering complex questions.
+\newblock In \emph{Proceedings of the 2018 Conference of the North American
+  Chapter of the Association for Computational Linguistics: Human Language
+  Technologies (NAACL-HLT)}, pages 641--651. Association for Computational
+  Linguistics, 2018.
+
+\bibitem[Trivedi et~al.(2023)Trivedi, Balasubramanian, Khot, and
+  Sabharwal]{trivedi2022ircot}
+Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish Sabharwal.
+\newblock Interleaving retrieval with chain-of-thought reasoning for
+  knowledge-intensive multi-step questions.
+\newblock In \emph{Proceedings of the 61st Annual Meeting of the Association
+  for Computational Linguistics}, pages 10014--10037. Association for
+  Computational Linguistics, 2023.
+
+\bibitem[Vaswani et~al.(2017)Vaswani, Shazeer, Parmar, Uszkoreit, Jones, Gomez,
+  Kaiser, and Polosukhin]{vaswani2017attention}
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones,
+  Aidan~N. Gomez, Lukasz Kaiser, and Illia Polosukhin.
+\newblock Attention is all you need.
+\newblock In \emph{Advances in Neural Information Processing Systems}, 2017.
+
+\bibitem[Wang et~al.(2023)Wang, Wei, Schuurmans, Le, Chi, Narang, Chowdhery,
+  and Zhou]{wang2023selfconsistency}
+Xuezhi Wang, Jason Wei, Dale Schuurmans, Quoc~V Le, Ed~H. Chi, Sharan Narang,
+  Aakanksha Chowdhery, and Denny Zhou.
+\newblock Self-consistency improves chain of thought reasoning in language
+  models.
+\newblock In \emph{International Conference on Learning Representations}, 2023.
+
+\bibitem[Wei et~al.(2022)Wei, Wang, Schuurmans, Bosma, Ichter, Xia, Chi, Le,
+  and Zhou]{wei2022cot}
+Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Brian Ichter, Fei Xia,
+  Ed~Chi, Quoc Le, and Denny Zhou.
+\newblock Chain-of-thought prompting elicits reasoning in large language
+  models.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~35, pages 24824--24837, 2022.
+
+\bibitem[Willard and Louf(2023)]{willard2023outlines}
+Brandon~T. Willard and R\'{e}mi Louf.
+\newblock Efficient guided generation for large language models, 2023.
+
+\bibitem[Xu et~al.(2025)Xu, Jain, and
+  Kankanhalli]{xu2025hallucinationinevitable}
+Ziwei Xu, Sanjay Jain, and Mohan Kankanhalli.
+\newblock Hallucination is inevitable: An innate limitation of large language
+  models, 2025.
+
+\bibitem[Yao et~al.(2023)Yao, Yu, Zhao, Shafran, Griffiths, Cao, and
+  Narasimhan]{yao2023tree}
+Shunyu Yao, Dian Yu, Jeffrey Zhao, Izhak Shafran, Tom Griffiths, Yuan Cao, and
+  Karthik Narasimhan.
+\newblock Tree of thoughts: Deliberate problem solving with large language
+  models.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~36, pages 11809--11822, 2023.
+
+\bibitem[Yasunaga et~al.(2021)Yasunaga, Ren, Bosselut, Liang, and
+  Leskovec]{yasunaga2021qagnn}
+Michihiro Yasunaga, Hongyu Ren, Antoine Bosselut, Percy Liang, and Jure
+  Leskovec.
+\newblock {QA-GNN}: Reasoning with language models and knowledge graphs for
+  question answering.
+\newblock In \emph{Proceedings of the 2021 Conference of the North American
+  Chapter of the Association for Computational Linguistics: Human Language
+  Technologies}, pages 535--546. Association for Computational Linguistics,
+  2021.
+
+\bibitem[Yata et~al.(2024)]{marisatrie}
+Susumu Yata et~al.
+\newblock marisa-trie: Matching algorithm with recursively implemented storage.
+\newblock \url{https://github.com/s-yata/marisa-trie}, 2024.
+
+\bibitem[Yih et~al.(2016)Yih, Richardson, Meek, Chang, and Suh]{yih2016websqp}
+Wen-tau Yih, Matthew Richardson, Christopher Meek, Ming-Wei Chang, and Jina
+  Suh.
+\newblock The value of semantic parse labeling for knowledge base question
+  answering.
+\newblock In \emph{Proceedings of the 54th Annual Meeting of the Association
+  for Computational Linguistics}, pages 201--206. Association for Computational
+  Linguistics, 2016.
+
+\bibitem[Yu et~al.(2023)Yu, Chen, Onoe, and Qi]{yu2023decaf}
+Donghan Yu, Chenguang Chen, Yin Onoe, and Peng Qi.
+\newblock Decaf: Joint decoding of answers and logical forms for question
+  answering over knowledge bases.
+\newblock In \emph{International Conference on Learning Representations}, 2023.
+
+\bibitem[Yuan et~al.(2026)Yuan, Deng, Liu, and Zhang]{yuan2026routerkgqa}
+Bo~Yuan, Hexuan Deng, Xuebo Liu, and Min Zhang.
+\newblock Routerkgqa: Specialized--general model routing for constraint-aware
+  knowledge graph question answering, 2026.
+
+\bibitem[Zhang et~al.(2023)Zhang, Dang, Peng, and Van~den
+  Broeck]{zhang2023tractable}
+Honghua Zhang, Meihua Dang, Nanyun Peng, and Guy Van~den Broeck.
+\newblock Tractable control for autoregressive language generation.
+\newblock In \emph{International Conference on Machine Learning}, 2023.
+
+\bibitem[Zhuang et~al.(2024)Zhuang, Zhang, Zheng, Du, Wang, Ren, Huang, Fu,
+  Yue, and Chen]{zhuang2024structlm}
+Alex Zhuang, Ge~Zhang, Tianyu Zheng, Xinrun Du, Junjie Wang, Weiming Ren,
+  Wenhao Huang, Jie Fu, Xiang Yue, and Wenhu Chen.
+\newblock Struct{LM}: Towards building generalist models for structured
+  knowledge grounding.
+\newblock In \emph{First Conference on Language Modeling}, 2024.
+
+\end{thebibliography}

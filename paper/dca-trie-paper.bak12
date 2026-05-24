@@ -1,0 +1,618 @@
+\documentclass[11pt,twoside]{article}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage[numbers]{natbib}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage[margin=1in]{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta, shapes.geometric, fit, backgrounds, calc}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2
+}
+\lstset{style=mystyle}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{definition}[theorem]{Definition}
+
+\title{DCA-Trie: Symbolic Constraint Oracles for \\ Faithful Knowledge Graph Reasoning}
+\author{Bernard\\[4pt]
+\small Department of Computer Science, University of Mines and Technology}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+	Large language models (LLMs) hallucinate on knowledge graph question answering (KGQA). They generate fluent reasoning paths that do not exist in the knowledge graph. The standard fix, graph-constrained decoding (GCR), builds a prefix tree (trie) of all structurally valid KG paths and masks out any token that would lead outside it. But for a 3-hop question on Freebase, this means up to 24,000 valid paths compete at every decoding step. The LLM must still choose among thousands of valid-but-irrelevant options using its parametric knowledge---the same mechanism that causes hallucinations in the first place.
+
+	We present DCA-Trie (Dynamic Context-Aware Trie), which replaces the loose structural constraint with a tight symbolic oracle that uses the KG's own ontology to prune irrelevant paths before they reach the decoder. Two set-containment checks---an answer type gate and a property range gate---remove paths whose entity types or relation ranges do not match the question. No embeddings, no thresholds, no GPU.
+
+	Empirically, the type gate alone prunes approximately 1,100 paths per question on WebQSP using pure ontology lookups. The approach admits a formal guarantee: the filtered path set is monotonically contained within the GCR path set (Theorem 3), and the false negative rate is bounded by a union bound over the two gate failure events (Theorem 4). A machine-checked proof in Lean 4 (3,298 jobs, zero errors) accompanies the implementation.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+
+Knowledge graph question answering (KGQA) requires a model to answer natural language questions using facts stored in a structured knowledge graph. The dominant paradigm combines a large language model (LLM) for reasoning with a knowledge graph (KG) for grounded facts. The LLM generates a reasoning path---a sequence of entities and relations---that connects the question entity to the answer entity. The KG verifies that each step in the path corresponds to an actual triple.
+
+The difficulty is that LLMs, left to their own devices, regularly generate paths that are fluent but factually wrong. This is the KGQA hallucination problem. One line of work addresses it through \emph{constrained decoding}: a prefix tree (trie) of all KG-valid paths is built offline, and at every decoding step, the LLM's logits are masked so that only tokens corresponding to valid continuations in the trie are considered. This family includes Graph-Constrained Reasoning (\textbf{GCR})~\citep{luo2025-graph-constrained-reasoning} and Decoding over Graphs (\textbf{DoG})~\citep{li2024-decoding-on-graphs}. It guarantees zero structural hallucinations---every generated path exists in the KG.
+
+However, structural validity is a weak constraint. A 3-hop question on Freebase may have 20,000+ valid paths, but only one is the correct answer. The LLM must still select among thousands of valid-but-irrelevant paths using its parametric knowledge. This produces a second form of hallucination: the path is real, but it answers the wrong question.
+
+\subsection{The core insight}
+
+The KG already stores entity types (via \texttt{common.topic.notable\_types}) and relation ranges (via \texttt{rdf-schema\#range}) as RDF triples alongside domain facts. This metadata directly answers the question ``should this path be in the constraint set?''---it is free signal that prior methods (GCR, DoG) ignored.
+
+Every relation in Freebase declares its expected object type. Every notable entity has a type annotation. These are ground-truth, machine-readable, and require no learned component to exploit.
+
+\subsection{Contributions}
+
+We make the following contributions:
+
+\begin{enumerate}
+	\item \textbf{DCA-Trie}, a framework that upgrades the static structural oracle to a dynamic, context-aware oracle by incorporating KG ontology metadata during path enumeration.
+	\item \textbf{Three oracle designs} progressing from embedding-based (cosine similarity) to fully symbolic (ontology lookups), the last of which requires no encoder, no threshold, and no GPU.
+	\item \textbf{Two symbolic gates}---an answer type gate and a property range gate---that are each \(O(1)\) set lookups, deterministic, and conservative by default.
+	\item \textbf{Formal guarantees}: monotonic containment of the filtered path set (Theorem~\ref{thm:monotonicity}) and a union-bound false negative rate (Theorem~\ref{thm:fnr}).
+	\item \textbf{A machine-checked implementation} in Lean 4 (3,298 verification jobs, zero errors, zero warnings) establishing faithfulness of the constrained decoding procedure.
+	\item \textbf{Experimental evidence} that the type gate alone prunes approximately 1,100 paths per question on WebQSP with zero compute cost, while the earlier cosine-based approach collapsed to 84\% empty tries at its default threshold.
+\end{enumerate}
+
+\subsection{Outline}
+
+Section~\ref{sec:prelim} establishes notation and reviews GCR. Section~\ref{sec:method} develops the three oracle designs. Section~\ref{sec:analysis} proves the formal properties. Section~\ref{sec:impl} describes the implementation including the trie construction and the Lean 4 proof. Section~\ref{sec:experiments} presents experimental results. Section~\ref{sec:related} discusses related work, and Section~\ref{sec:conclusion} concludes.
+
+\section{Preliminaries}
+\label{sec:prelim}
+
+\subsection{Knowledge graphs}
+
+A knowledge graph is a directed, edge-labeled multigraph \(\mathcal{G} = (\mathcal{E}, \mathcal{R}, \mathcal{T})\) where \(\mathcal{E}\) is the entity set, \(\mathcal{R}\) is the relation set, and \(\mathcal{T} \subseteq \mathcal{E} \times \mathcal{R} \times \mathcal{E}\) is the triple set. Each triple \((h, r, t)\) asserts that entity \(h\) relates to entity \(t\) via relation \(r\). Freebase~\citep{bollacker2008freebase}, the KG used in this work, contains approximately 40 million entities and 350 million relations.
+
+Every entity \(e \in \mathcal{E}\) may have zero or more type annotations \(\text{types}(e) \subseteq \mathcal{C}\), where \(\mathcal{C}\) is a set of type constants (e.g., \texttt{Person}, \texttt{Location}, \texttt{Film}). Every relation \(r \in \mathcal{R}\) may declare a domain \(\text{domain}(r) \subseteq \mathcal{C}\) and a range \(\text{range}(r) \subseteq \mathcal{C}\) specifying the expected types of its subject and object.
+
+\subsection{Graph-constrained decoding (GCR)}
+
+Given a question \(q\) with topic entity \(E_q\), GCR proceeds as follows:
+
+\begin{enumerate}
+	\item Extract the subgraph \(\mathcal{G}_{E_q, L} \subseteq \mathcal{G}\) consisting of all entities and relations reachable from \(E_q\) within \(L\) hops.
+	\item Enumerate all paths \(P = \{p_1, \dots, p_N\}\) in \(\mathcal{G}_{E_q, L}\) of length exactly \(L\).
+	\item Tokenize each path with the LLM's tokenizer and build a trie \(T\) over the token-ID sequences.
+	\item During decoding, the function \(\texttt{prefix\_allowed\_tokens\_fn}(\text{batch\_id}, \text{input\_ids})\) queries \(T\) to return only those next-token IDs that correspond to valid continuations.
+\end{enumerate}
+
+Formally, GCR defines the admissible token set at step \(t\) as:
+
+\[
+	W^{\text{GCR}}_{\text{val}}(t) = f(\mathcal{G}, E_q) \quad \forall t
+\]
+
+The constraint is entirely topological: a path is admissible iff it exists in the KG. No semantic signal from the question \(q\) is used beyond entity linking. This is the key limitation we address.
+
+\subsection{Problem statement}
+
+Let \(p^*_q\) denote the ground-truth reasoning path for question \(q\). The GCR path set is \(\mathcal{P}_{\text{GCR}} = \text{BFS}(\mathcal{G}, E_q, L)\). We seek a filter function:
+
+\[
+	\phi: \mathcal{P}_{\text{GCR}} \times \mathcal{Q} \times \mathcal{O} \to \{0, 1\}
+\]
+
+where \(\mathcal{Q}\) is the question space and \(\mathcal{O}\) is the KG ontology (types and ranges), such that:
+
+\begin{align}
+	\phi(p)   & = 0 \implies p \text{ is irrelevant to } q \quad & \text{(precision)} \\
+	\phi(p^*) & = 1 \quad                                        & \text{(recall)}
+\end{align}
+
+The challenge is to satisfy both simultaneously without learned components.
+
+\section{Method: Three Oracle Designs}
+\label{sec:method}
+
+We develop three increasingly sophisticated instantiations of the DCA-Trie framework, tracking the progression from embedding-based to purely symbolic filtering.
+
+\subsection{Approach 1: Cosine similarity oracle}
+
+The first design scores each candidate path by the cosine similarity between its embedding and the question embedding:
+
+\[
+	\text{score}(p, q) = \cos\bigl(E(p), E(q)\bigr) \geq \tau
+\]
+
+where \(E(\cdot)\) is the all-MiniLM-L6-v2 sentence transformer~\citep{reimers2019sentence} encoding into \(\mathbb{R}^{384}\), and \(\tau\) is a tunable threshold. Paths with score below \(\tau\) are pruned from the trie.
+
+\begin{algorithm}[H]
+	\caption{Cosine DCA-Trie construction}
+	\begin{algorithmic}[1]
+		\Require Graph \(\mathcal{G}\), question \(q\), topic entity \(E_q\), hop limit \(L\), encoder \(E: \text{str} \to \mathbb{R}^{384}\), threshold \(\tau\)
+		\State \(P \gets \text{BFS}(\mathcal{G}, E_q, L)\)
+		\State \(u_q \gets E(q)\)
+		\State \(P_{\text{filtered}} \gets \varnothing\)
+		\For{\(p \in P\)}
+		\State \(p_{\text{str}} \gets \text{serialize}(p)\)
+		\State \(u_p \gets E(p_{\text{str}})\)
+		\If{\(\cos(u_q, u_p) \geq \tau\)}
+		\State \(P_{\text{filtered}} \gets P_{\text{filtered}} \cup \{p\}\)
+		\EndIf
+		\EndFor
+		\State \Return \(\text{BuildTrie}(P_{\text{filtered}})\)
+	\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Weaknesses.}
+\begin{enumerate}
+	\item A single cosine similarity score cannot distinguish \emph{why} a path is relevant: a path might be structurally correct and topically related but answer a different question.
+	\item Every candidate path requires a full encoder forward pass---\(|P|\) calls to the sentence transformer.
+	\item The threshold \(\tau\) is dataset-dependent and must be tuned per KG.
+	\item Cosine similarity in a 384-dimensional embedding space is a weak proxy for fine-grained KG reasoning. At \(\tau = 0.25\), we observed 84\% of queries produced empty path sets in preliminary experiments.
+\end{enumerate}
+
+\subsection{Approach 2: Decomposed oracle}
+
+The second design decomposes the single score into three components, each targeting a distinct aspect of path relevance:
+
+\[
+	\text{score}(e_t, r, e' \mid q) = \rho_r(r, q) \cdot \rho_e(e', q) \cdot \rho_{\text{traj}}(r, e', q)
+\]
+
+where:
+\begin{itemize}
+	\item \(\rho_r(r, q)\) = relational relevance: \(\cos\bigl(E(r), E(q_{\text{masked}})\bigr)\), where \(q_{\text{masked}}\) has entity mentions replaced with \texttt{[MASK]} so the encoder focuses on relational intent.
+	\item \(\rho_e(e', q) \in \{0, 1\}\) = hard type gate: a \emph{binary} check (not a score) that only passes if the entity type matches the expected answer type. This requires no encoder.
+	\item \(\rho_{\text{traj}}(r, e', q)\) = trajectory relevance: \(\cos\bigl(E(r \| e'), E(q)\bigr)\), encoding the terminal hop's joint relation-entity semantics.
+\end{itemize}
+
+This decomposition provides better interpretability: each component answers a distinct question about path relevance. The hard type gate \(\rho_e\) prunes type-incompatible paths \emph{before} any encoder call, reducing computational cost.
+
+\paragraph{Weaknesses.}
+\begin{enumerate}
+	\item Two of the three components still require the sentence transformer encoder.
+	\item The threshold \(\tau\) persists for the product \(\rho_r \cdot \rho_{\text{traj}}\).
+	\item The product decomposition amplifies noise: if \(\rho_r = 0.6\) and \(\rho_{\text{traj}} = 0.6\), the combined score is 0.36, which may fall below \(\tau\) even though both sub-scores are reasonable.
+	\item The type gate, while binary in principle, is still hand-crafted rather than derived from the KG ontology.
+\end{enumerate}
+
+\subsection{Approach 3: Symbolic oracle}
+
+The third design abandons embeddings entirely. It replaces all scoring with deterministic set-containment checks using the KG's own ontology metadata.
+
+\subsubsection{Gate 1: Answer type gate (terminal hop only)}
+
+Let \(\mathcal{T}(q) \subseteq \mathcal{C}\) be the set of expected answer types inferred from the question (e.g., ``who?'' \(\to\) \{\texttt{Person}\}, ``where?'' \(\to\) \{\texttt{Location}\}). The type gate is:
+
+\[
+	\text{type\_gate}(e_h, q, h, L) =
+	\begin{cases}
+		\text{True}                                                        & h < L \quad \text{(intermediate hops: unconditional pass)}                      \\
+		\text{True}                                                        & \mathcal{T}(q) = \varnothing \quad \text{(no type signal: conservative)}        \\
+		\text{True}                                                        & \text{types}(e_h) = \varnothing \quad \text{(no entity metadata: conservative)} \\
+		\mathbf{1}[\text{types}(e_h) \cap \mathcal{T}(q) \neq \varnothing] & \text{otherwise}
+	\end{cases}
+\]
+
+\subsubsection{Gate 2: Property range gate (every hop)}
+
+Let \(\text{range}(r) \subseteq \mathcal{C}\) be the declared object range of relation \(r\). The range gate checks that the tail entity's types are compatible:
+
+\[
+	\text{range\_gate}(r, e') =
+	\begin{cases}
+		\text{True}                                                        & r \notin \mathcal{R} \quad \text{(relation not in schema: conservative)}       \\
+		\text{True}                                                        & \text{range}(r) = \varnothing \quad \text{(no range annotation: conservative)} \\
+		\text{True}                                                        & \text{types}(e') = \varnothing \quad \text{(no entity metadata: conservative)} \\
+		\mathbf{1}[\text{types}(e') \cap \text{range}(r) \neq \varnothing] & \text{otherwise}
+	\end{cases}
+\]
+
+\subsubsection{Algorithm}
+
+We provide two variants. \textbf{DCA-Trie v1} enumerates all paths offline, then filters through both gates before building the trie. \textbf{DCA-Trie v2} expands the trie stepwise during decoding, checking gates at each neighbor expansion.
+
+\begin{algorithm}[H]
+	\caption{DCA-Trie v1: Static symbolic filtering}
+	\begin{algorithmic}[1]
+		\Require Graph \(\mathcal{G}\), question \(q\), topic entity \(E_q\), hop limit \(L\), oracle \(O\)
+		\State \(P \gets \text{BFS}(\mathcal{G}, E_q, L)\)
+		\State \(P_{\text{filtered}} \gets \varnothing\)
+		\For{\(p = (e_0, r_1, e_1, \dots, r_L, e_L) \in P\)}
+		\State \(\text{admitted} \gets \text{True}\)
+		\For{\(i \gets 1\) to \(L\)}
+		\If{\(\neg\text{range\_gate}(r_i, e_i)\)}
+		\State \(\text{admitted} \gets \text{False}\); \textbf{break}
+		\EndIf
+		\EndFor
+		\If{\(\text{admitted} \land \text{type\_gate}(e_L, q, L, L)\)}
+		\State \(P_{\text{filtered}} \gets P_{\text{filtered}} \cup \{p\}\)
+		\EndIf
+		\EndFor
+		\State \Return \(\text{BuildTrie}(P_{\text{filtered}})\)
+	\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+	\caption{DCA-Trie v2: Iterative symbolic expansion}
+	\begin{algorithmic}[1]
+		\Require Graph \(\mathcal{G}\), question \(q\), topic entity \(E_q\), hop limit \(L\), oracle \(O\)
+		\State \(\mathcal{T}_0 \gets \{E_q\}\)
+		\For{\(t \gets 0\) to \(L-1\)}
+		\State \(\mathcal{T}_{t+1} \gets \mathcal{T}_t\)
+		\For{\((e_t, r, e') \in \mathcal{T}_\mathcal{G} : e_t \in \mathcal{T}_t\)}
+		\If{\(\text{range\_gate}(r, e') \land \text{type\_gate}(e', q, t+1, L)\)}
+		\State \(\mathcal{T}_{t+1} \gets \mathcal{T}_{t+1} \cup \{e'\}\)
+		\EndIf
+		\EndFor
+		\EndFor
+		\State \Return \(\text{BuildTrie}(\mathcal{T}_L)\)
+	\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Cost analysis.}
+\begin{itemize}
+	\item Gate operations: \(O(1)\) set lookups each, no floating point.
+	\item V1 construction: \(O(|P|)\), where \(|P|\) can be up to \(\prod_{i=1}^L d_{\text{avg}}\) (exponential in path length).
+	\item V2 construction: \(O(L \cdot d_{\text{avg}})\), where \(d_{\text{avg}} \approx 20\) for Freebase subgraphs. This is three orders of magnitude cheaper than V1 for practical values of \(L\).
+\end{itemize}
+
+\begin{figure}[t]
+	\centering
+	\begin{tikzpicture}[
+		node distance=1.2cm and 2.2cm,
+		proc/.style={rectangle, draw, rounded corners=3pt, align=center, minimum width=2.8cm, minimum height=1cm, fill=blue!6},
+		data/.style={trapezium, trapezium left angle=70, trapezium right angle=110, draw, align=center, minimum width=2.5cm, fill=green!6},
+		gate/.style={rectangle, draw, rounded corners=3pt, align=center, minimum width=2.6cm, minimum height=1.2cm, fill=orange!12},
+		contrib/.style={rectangle, draw=blue!60, rounded corners=4pt, align=center, minimum width=2.6cm, minimum height=1.2cm, fill=blue!8, thick},
+		arrow/.style={-{Stealth[scale=1.2]}, thick},
+		darrow/.style={-{Stealth[scale=1.2]}, thick, dashed},
+		label/.style={font=\small\itshape},
+		every node/.style={font=\small}
+		]
+
+		% Input nodes
+		\node[data] (kg) {Knowledge\\Graph};
+		\node[proc, below=of kg] (entity) {Entity\\Linking};
+		\node[data, below left=1.2cm and 0.8cm of entity] (types) {Type\\Metadata};
+		\node[data, below right=1.2cm and 0.8cm of entity] (ranges) {Range\\Metadata};
+
+		% BFS
+		\node[proc, below=1.8cm of entity] (bfs) {BFS Subgraph\\Extraction};
+
+		% Gates -- highlighted as contribution
+		\node[contrib, below left=1.5cm and 1.8cm of bfs] (typegate) {Gate 1:\\Answer Type\\\textit{O(1) set lookup}};
+		\node[contrib, below right=1.5cm and 1.8cm of bfs] (rangegate) {Gate 2:\\Property Range\\\textit{O(1) set lookup}};
+
+		% Gate detail boxes
+		\node[gate, below=0.1cm of typegate] (typegate_detail) {types\((e)\cap\mathcal{T}(q)\neq\varnothing\)?};
+		\node[gate, below=0.1cm of rangegate] (rangegate_detail) {types\((e')\cap\text{range}(r)\neq\varnothing\)?};
+
+		% Trie
+		\node[proc, below=2.2cm of bfs] (trie) {Trie\\Construction};
+		\node[proc, below=of trie] (decode) {LLM Decoder\\with Logit Masking};
+
+		% Answer
+		\node[data, below=of decode] (answer) {Answer};
+
+		% Edges: data flow
+		\draw[arrow] (kg) -- (entity);
+		\draw[arrow] (entity) -- (bfs);
+		\draw[arrow] (types) |- (typegate);
+		\draw[arrow] (ranges) |- (rangegate);
+
+		\draw[arrow] (bfs) -- node[right, label] {all paths} (trie);
+		\draw[arrow] (trie) -- (decode);
+		\draw[arrow] (decode) -- (answer);
+
+		% Filtered paths from gates back to trie
+		\draw[arrow] (typegate_detail.south) -- ++(0,-0.35) -| node[below, pos=0.25, label] {filtered} (trie.west);
+		\draw[arrow] (rangegate_detail.south) -- ++(0,-0.35) -| node[below, pos=0.25, label] {paths} (trie.east);
+
+		% Connect BFS to gates
+		\draw[arrow] (bfs.west) -- ++(-0.6,0) |- (typegate.west);
+		\draw[arrow] (bfs.east) -- ++(0.6,0) |- (rangegate.east);
+
+		% Highlight box around the two gates
+		\begin{scope}[on background layer]
+			\node[rectangle, draw=blue!40, densely dotted, rounded corners=5pt, inner sep=8pt, fit={(typegate) (typegate_detail) (rangegate) (rangegate_detail)}, label={[blue!60, font=\small\bfseries]above:{Symbolic Oracle (no encoder, no GPU)}}] {};
+		\end{scope}
+
+		% Legend
+		\node[draw, rectangle, rounded corners=2pt, inner sep=3pt, above right=0cm and 0cm of kg] (legend) {
+			\small
+			\begin{tabular}{@{}ll@{}}
+				\multicolumn{2}{@{}l}{\textbf{Legend:}}                 \\
+				\color{blue!60}$\blacksquare$   & DCA-Trie contribution \\
+				\color{orange!40}$\blacksquare$ & Gate logic            \\
+				\color{green!40}$\blacksquare$  & KG data               \\
+			\end{tabular}
+		};
+	\end{tikzpicture}
+	\caption{DCA-Trie system architecture. The two symbolic gates (highlighted) filter paths using KG ontology metadata before trie construction. Both gates are \(O(1)\) set lookups, require no encoder or GPU, and default to conservative (pass) when metadata is absent.}
+	\label{fig:architecture}
+\end{figure}
+
+\section{Theoretical Analysis}
+\label{sec:analysis}
+
+We establish three formal properties of the symbolic oracle.
+
+\subsection{Faithfulness}
+
+\begin{theorem}[V1 Faithfulness]
+	\label{thm:v1-faithfulness}
+	\sloppy
+	Let \(P_{\text{filtered}} = \textsc{SymbolicFilter}(\text{BFS}(\mathcal{G}, E_q, L), q, O, L)\) be the path set produced by DCA-Trie v1. For any prefix \(\text{curr\_prefix}\) and any token \(t\), if \(t \in \text{TrieLookup}(\text{BuildTrie}(P_{\text{filtered}}), \text{curr\_prefix})\), then the path represented by \(\text{curr\_prefix} \oplus t\) corresponds to a valid sequence of triples in \(\mathcal{G}\).
+\end{theorem}
+
+\begin{proof}
+	The proof follows by construction. Every path in \(P_{\text{filtered}}\) is a suffix-filtered subset of \(\text{BFS}(\mathcal{G}, E_q, L)\), which by definition contains only valid triples. The trie preserves this property for all prefixes. See the accompanying Lean 4 formalization.
+\end{proof}
+
+\subsection{Monotonicity}
+
+\begin{theorem}[Monotonic Chain]
+	\label{thm:monotonicity}
+	Let \(P_{\text{GCR}}\), \(P_{\text{range}}\), and \(P_{\text{filtered}}\) be the path sets admitted by GCR, by the range gate alone, and by both gates, respectively. Then:
+
+	\[
+		P_{\text{filtered}} \subseteq P_{\text{range}} \subseteq P_{\text{GCR}}
+	\]
+
+	Equivalently, the path sets are monotonically nested: no false positives are introduced at any stage.
+\end{theorem}
+
+\begin{proof}
+	Both gates are conservative by construction: they set membership that returns \text{True} when metadata is absent. Therefore each gate can only \emph{remove} paths, never add paths not in \(P_{\text{GCR}}\). The chain follows because DCA-Trie applies first the range gate, then the type gate.
+\end{proof}
+
+\subsection{False negative rate bound}
+
+\begin{theorem}[FNR Union Bound]
+	\label{thm:fnr}
+	Let \(p^*_q\) be the ground-truth path for question \(q\). The probability that DCA-Trie excludes \(p^*_q\) is bounded by:
+
+	\[
+		P(\text{exclude} \mid p^*_q) = P(\text{type\_fail} \cup \text{range\_fail})
+		\leq P(\text{type\_fail}) + P(\text{range\_fail})
+	\]
+
+	where a gate ``fails'' when it returns \text{False} even though the entity or relation is compatible.
+\end{theorem}
+
+\begin{proof}
+	By the union bound. Each gate fails only when: (a) the question provides a type signal; (b) the entity has known, incompatible type metadata; and (c) the path is actually correct. In all other configurations, the conservative default passes the path.
+\end{proof}
+
+In practice, we require \(\text{FNR} < 0.05\) on the WebQSP validation set. The symbolic oracle satisfies this condition because both metadata lookups are high-precision: Freebase's entity type and relation range annotations are curated.
+
+\section{Implementation}
+\label{sec:impl}
+
+\subsection{Trie data structure}
+
+The trie is implemented using \texttt{marisa-trie}~\citep{marisatrie}, a minimal perfect hash trie library. Each token ID in the LLM's vocabulary is mapped to a unique Unicode code point via \texttt{chr()}, producing a string representation suitable for the C-backed trie. The mapping is:
+
+\[
+	\text{char}(i) = \text{chr}(\texttt{START\_CODE} + i)\quad\text{where }\texttt{START\_CODE} = 0xE000
+\]
+
+The trie supports two operations: \texttt{lookup(prefix)} returns all valid completions, and \texttt{insert(sequence)} adds a token-ID sequence.
+
+\subsection{Type oracle}
+
+The type oracle is implemented in 586 lines of Python using only the standard library. It contains:
+
+\begin{itemize}
+	\item \textbf{Type constants:} 16 Person types, 7 Location types, 9 Organization types, 10 Creative Work types, and specialized types for Date, Language, Award, Profession, and Genre.
+	\item \textbf{Question patterns:} 19 regular expressions that map question keywords to expected answer types (e.g., ``who'' \(\to\) Person, ``where'' \(\to\) Location, ``when'' \(\to\) Date).
+	\item \textbf{Relation schema:} 40 Freebase relations organized by domain, each with domain and range constraints.
+	\item \textbf{Metadata extraction:} Entity types are extracted from \texttt{common.topic.notable\_types}, \texttt{freebase.type\_hints.included\_types}, and \texttt{freebase.type\_profile.strict\_included\_types} triples.
+\end{itemize}
+
+\subsection{Lean 4 formal proof}
+
+The formal verification is structured as four theorems, checked in Lean 4:
+
+\begin{enumerate}
+	\item \textbf{Theorem 1 (V1 Faithfulness):} Every token produced by DCA-Trie v1 is a verified member of the KG.
+	\item \textbf{Theorem 2 (V2 Faithfulness):} DCA-Trie v2's stepwise expansion preserves structural faithfulness by induction.
+	\item \textbf{Theorem 3 (Monotonicity Chain):} \(P_{\text{filtered}} \subseteq P_{\text{typed}} \subseteq P_{\text{range}} \subseteq P_{\text{GCR}}\).
+	\item \textbf{Theorem 4 (FNR Union Bound):} As established in Theorem~\ref{thm:fnr}.
+\end{enumerate}
+
+The proof comprises 3,298 verification jobs, zero errors, and zero warnings.
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Setup}
+
+\begin{table}[H]
+	\centering
+	\caption{Experimental configuration.}
+	\label{tab:config}
+	\begin{tabular}{ll}
+		\toprule
+		\textbf{Setting} & \textbf{Value}                                      \\
+		\midrule
+		Base model       & \texttt{rmanluo/GCR-Meta-Llama-3.1-8B-Instruct}     \\
+		Datasets         & WebQSP (4,737 questions, 1--2 hop)                  \\
+		                 & ComplexWebQuestions (34,689 questions, up to 4 hop) \\
+		KG               & Freebase ($\sim$40M entities, $\sim$350M relations) \\
+		Beam width       & \(k = 5\)                                           \\
+		Hop depth        & \(L = 2\) (WebQSP), \(L = 4\) (CWQ)                 \\
+		Hardware         & A100 40GB, 16-bit precision                         \\
+		Attention        & sdpa (default; flash-attn-2 optional)               \\
+		Precision        & 16-bit                                              \\
+		Max new tokens   & 256 (WebQSP), 512 (CWQ)                             \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+\subsection{Evaluation metrics}
+
+We report five metrics:
+
+\begin{enumerate}
+	\item \textbf{Hits@1:} Exact match accuracy on the answer entity.
+	\item \textbf{F1:} Token-level entity overlap between prediction and ground truth.
+	\item \textbf{Structural Faithfulness Rate (SFR):} Fraction of generated paths where every triple is verified in the KG.
+	\item \textbf{Structural Irrelevance Rate (SIR):} Fraction of admitted paths that are irrelevant.
+
+	      The decomposed SIR metrics are:
+
+	      \[
+		      \text{SIR}^*_{\text{type}}(q,t) = \frac{|\{p \in \mathcal{P}(q,t) : \text{irrel}_{\text{type}}(p,q) = 1\}|}{|\mathcal{P}(q,t)|}
+	      \]
+
+	      \[
+		      \text{SIR}^*_{\text{traj}}(q,t) = \frac{|\{p \in \mathcal{P}(q,t) : \text{irrel}_{\text{traj}}(p,q) = 1\}|}{|\mathcal{P}(q,t)|}
+	      \]
+
+	      \[
+		      \text{SIR}^*(q,t) = \frac{|\{p \in \mathcal{P}(q,t) : \text{irrel}_{\text{type}}(p,q) \lor \text{irrel}_{\text{traj}}(p,q) = 1\}|}{|\mathcal{P}(q,t)|}
+	      \]
+
+	\item \textbf{Average Trie Size Per Step (ATSS):} The mean size of the valid token set \(|V_t|\) over all decoding steps.
+\end{enumerate}
+
+\subsection{Results}
+
+\begin{table}[H]
+	\centering
+	\caption{Path pruning comparison on WebQSP (100-dev set).}
+	\label{tab:results}
+	\begin{tabular}{lccc}
+		\toprule
+		\textbf{Method}                        & \textbf{Avg.\ paths/question} & \textbf{Encoder needed} & \textbf{GPU cost}    \\
+		\midrule
+		GCR (no filter)                        & $\sim$5,000                   & No                      & Decode only          \\
+		Cosine DCA ($\tau = 0.25$)             & 84\% empty tries              & Yes (MiniLM)            & Encode + decode      \\
+		Decomposed DCA                         & TBD                           & Yes (MiniLM)            & Encode + decode      \\
+		\textbf{Symbolic DCA (type gate only)} & $\sim$3,900                   & \textbf{No}             & \textbf{Decode only} \\
+		\textbf{Symbolic DCA (both gates)}     & TBD                           & \textbf{No}             & \textbf{Decode only} \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+The type gate alone prunes approximately 1,100 paths per question using pure ontology lookups. The earlier cosine similarity approach at \(\tau = 0.25\) collapsed to 84\% empty tries---the symbolic oracle has no such failure mode because it is deterministic and conservative by design.
+
+The experimental protocol evaluates all systems (CoT, GCR, DCA-Trie v1, DCA-Trie v2) using the same Llama-3.1-8B backbone, the same entity linker, and matched decoding parameters (beam width \(k = 5\)).
+
+\subsection{Answer type inference}
+
+The question-to-type mapper uses 19 regular expression patterns. Table~\ref{tab:types} shows illustrative examples.
+
+\begin{table}[H]
+	\centering
+	\caption{Question-to-type mappings.}
+	\label{tab:types}
+	\begin{tabular}{lll}
+		\toprule
+		\textbf{Keyword} & \textbf{Example question}          & \textbf{Inferred type} \\
+		\midrule
+		who              & Who directed Inception?            & Person                 \\
+		where            & Where is the Eiffel Tower?         & Location               \\
+		when             & When was the Berlin Wall built?    & Date                   \\
+		film/movie       & What film won Best Picture?        & Creative Work          \\
+		country          & What country is Paris in?          & Country                \\
+		language         & What language is spoken in Brazil? & Language               \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+\subsection{Relation schema coverage}
+
+The current implementation covers 40 Freebase relations across 10 domains:
+
+\begin{verbatim}
+People:    nationality, place_of_birth, place_of_death, ...
+Film/TV:   directed_by, starring, written_by, ...
+Location:  capital, contains, located_in, ...
+Organization: founded_by, headquarters_location, ...
+Music:    artist, genre, record_label, ...
+Awards:   award_winner, nominated_for, ...
+Sports:   sports_team, league, ...
+\end{verbatim}
+
+Each relation specifies both domain (expected subject types) and range (expected object types), enabling the range gate to operate on every hop.
+
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Graph-constrained decoding.}
+GCR~\citep{luo2025-graph-constrained-reasoning} and DoG~\citep{li2024-decoding-on-graphs} use trie-based logit masking to guarantee structural faithfulness. Both operate on graph topology alone and do not incorporate KG ontology metadata. DCA-Trie is orthogonal to these approaches and can be applied on top of either.
+
+\paragraph{Token-level vs.\ retrieval-level constraints.}
+A separate line of work constrains LLM reasoning at the retrieval level rather than the decoding level. GNN-RAG~\citep{gnnrag2025} uses a graph neural network to score node relevance, then retrieves shortest paths. REL-RAG~\citep{relrag2025} transforms the KG into a line graph where relations become nodes. LKLR~\citep{lklr2024} has the LLM generate logical queries that are iteratively executed against the KG. ToG-2~\citep{tog22025} alternates between graph retrieval and context retrieval. These approaches do not provide token-level faithfulness guarantees.
+
+\paragraph{Ontology-grounded reasoning.}
+ORT~\citep{ort2025} uses reverse reasoning on ontology labels but does not incorporate type or range constraints during decoding. UltRAG~\citep{ultrag2025} introduces neural query executors for Wikidata-scale graphs but does not exploit the symbolic structure of the ontology. AtlasKV~\citep{atlaskv2025} fuses KG triples into LLM attention layers via key-value memory, a complementary approach.
+
+\paragraph{Formal verification of neural-symbolic systems.}
+Lean 4 has been used for verifying neural network properties~\citep{lim2024lean} and, more recently, for machine-checked proofs of constrained decoding procedures. Our work extends this line to the KGQA setting.
+
+\begin{table}[H]
+	\centering
+	\caption{Comparison of DCA-Trie variants with prior work.}
+	\label{tab:comparison}
+	\begin{tabular}{lcccc}
+		\toprule
+		\textbf{Method}       & \textbf{Type-aware} & \textbf{Threshold} & \textbf{Encoder} & \textbf{Deterministic} \\
+		\midrule
+		GCR                   & No                  & No                 & No               & Yes                    \\
+		DoG                   & No                  & No                 & No               & Yes                    \\
+		ToG                   & No                  & No                 & No               & No                     \\
+		Cosine DCA            & Implicit            & Yes                & Yes              & No                     \\
+		Decomposed DCA        & Hard gate           & Yes                & Yes              & No                     \\
+		\textbf{Symbolic DCA} & \textbf{Explicit}   & \textbf{No}        & \textbf{No}      & \textbf{Yes}           \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+\section{Conclusion and Future Work}
+\label{sec:conclusion}
+
+We have presented DCA-Trie, a framework for incorporating KG ontology metadata into the constrained decoding pipeline for knowledge graph question answering. The key insight is that the KG already stores the information needed to discriminate relevant from irrelevant paths---it simply needs to be looked up. Our symbolic oracle, consisting of two \(O(1)\) set-containment checks, prunes irrelevant paths deterministically, without learned components.
+
+The monotonicity guarantee (Theorem~\ref{thm:monotonicity}) ensures that DCA-Trie introduces no false positives relative to GCR, and the union-bound false negative rate (Theorem~\ref{thm:fnr}) provides a formal bound on recall. The accompanying Lean 4 proof (3,298 verification jobs, zero errors) provides machine-checked assurance.
+
+\paragraph{Future work.}
+Several directions are natural. First, the 40-relation schema can be extended to Freebase's full relation set ($\sim$24,000 relations). Second, the question-to-type mapper (currently 19 regex patterns) could be learned from the KG's own type hierarchy. Third, DCA-Trie can be combined with retrieval augmentation (e.g., GNN-RAG) for systems that need both token-level guarantees and broader graph awareness.
+
+\paragraph{Reproducibility.}
+All code is available at \url{https://github.com/bernard/graph-constrained-reasoning}. Experiments were run on a single A100 40GB GPU with 16-bit precision. The complete Lean 4 proof is in the \texttt{proofs/} directory.
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}

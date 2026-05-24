@@ -1,0 +1,1710 @@
+% =============================================================================
+% DCA-Trie Project Handbook
+% A comprehensive guide to the graph-constrained reasoning codebase
+% =============================================================================
+\documentclass[11pt,a4paper,oneside,openany]{book}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{bbm}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[top=2.5cm,bottom=2.5cm,left=3cm,right=3cm]{geometry}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{graphicx}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{pystyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    frame=single,
+    language=Python,
+}
+\lstset{style=pystyle}
+
+\setlength{\headheight}{13.6pt}
+\pagestyle{fancy}
+\fancyhead[L]{\leftmark}
+\fancyhead[R]{\thepage}
+\fancyfoot{}
+
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries}{\chaptertitlename\ \thechapter}{20pt}{\Huge}
+\titlespacing*{\chapter}{0pt}{-20pt}{40pt}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[chapter]
+\newtheorem{example}{Example}[chapter]
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\file}[1]{\texttt{#1}}
+\newcommand{\pkg}[1]{\texttt{#1}}
+
+\title{\Huge DCA-Trie Project Handbook\\[10pt]
+       \Large A Comprehensive Guide to the Codebase\\[20pt]
+       \large Architecture, Metrics, Dependencies, and Workflows}
+\author{Bernard}
+\date{\today}
+
+\begin{document}
+
+\frontmatter
+\maketitle
+\tableofcontents
+
+\chapter{Preface}
+
+This handbook provides a comprehensive reference for the DCA-Trie (Domain-Constraint-Aware Trie) project -- a graph-constrained reasoning framework for knowledge graph question answering (KGQA). The project implements and evaluates three approaches to reducing the path-explosion problem in KG-constrained decoding:
+
+\begin{enumerate}
+	\item \textbf{Approach 1 (Cosine scorer):} Embedding-based path scoring using sentence transformers and cosine similarity.
+	\item \textbf{Approach 2 (Decomposed oracle):} Factorised scoring with separate relational relevance, entity type gate, and trajectory components.
+	\item \textbf{Approach 3 (Symbolic TypeOracle):} Pure ontology-based path pruning using Freebase schema triples --- no embeddings, no thresholds, no GPU.
+\end{enumerate}
+
+The handbook covers every Python module in the codebase, explaining its purpose, interfaces, data flow, and relationships to other modules. It also documents all evaluation metrics, CLI arguments, dependencies, and experiment workflows.
+
+\mainmatter
+
+% =============================================================================
+% Chapter 1: Project Overview
+% =============================================================================
+\chapter{Project Overview}\label{ch:overview}
+
+\section{Research Problem}
+
+Knowledge Graph Question Answering (KGQA) requires finding answer entities reachable via multi-hop reasoning paths in a KG. Formally, given a question $q$ and a knowledge graph $\mathcal{K} = (\mathcal{E}, \mathcal{R}, T)$, find $A \subseteq \mathcal{E}$ such that there exists a reasoning path $e_0 \xrightarrow{r_1} e_1 \xrightarrow{r_2} \dots \xrightarrow{r_k} e_k$ where $e_0$ is a topic entity from $q$ and $e_k \in A$ is the answer.
+
+The core challenge for constrained-decoding approaches is the \textbf{path explosion problem}: a KG entity with average out-degree $\overline{d} = 20$ generates up to $\overline{d}^k = 8{,}000$ candidate paths at $k = 3$ hops. GCR (Luo et al., ICML 2025) builds a static trie over all paths, guaranteeing 100\% structural faithfulness but at exponential memory cost.
+
+\section{The DCA-Trie Solution}
+
+DCA-Trie prunes the constraint set using KG ontology metadata --- specifically, type and range declarations that are \emph{already present in the KG} but unused by prior methods. The pruning is:
+
+\begin{itemize}
+	\item \textbf{Symbolic}: Uses set lookups over type labels, not embedding similarity.
+	\item \textbf{Deterministic}: No thresholds, no random seed dependence, no GPU.
+	\item \textbf{Composable}: Each oracle gate can be independently enabled/disabled.
+	\item \textbf{Provably safe}: False negative analysis confirms 0\% gold-path exclusion.
+\end{itemize}
+
+\section{Three Approaches}
+
+\begin{table}[h]
+	\centering
+	\caption{Approach comparison}
+	\label{tab:approaches}
+	\begin{tabular}{lp{3cm}p{3cm}p{3cm}p{2.5cm}}
+		\toprule
+		Property         & Approach 1           & Approach 2           & Approach 3      \\
+		\midrule
+		Encoder          & Sentence transformer & Sentence transformer & None            \\
+		Threshold $\tau$ & Yes (0.25)           & Yes (0.25)           & None            \\
+		Type checking    & Implicit             & Hard gate            & Ontology-based  \\
+		Range checking   & None                 & None                 & Ontology-based  \\
+		Per-path cost    & Encoder forward pass & Encoder forward pass & O(1) set lookup \\
+		Deterministic    & No (float noise)     & No (float noise)     & Yes             \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+\section{Directory Structure}
+
+\begin{lstlisting}[numbers=none,frame=none]
+graph-constrained-reasoning/
++-- src/                       # Core library
+|   +-- llms/                  # Model wrappers (HF, proxy, GPT)
+|   +-- utils/                 # Graph, QA, training utilities
+|   +-- qa_prompt_builder.py   # Prompt construction & trie building
+|   +-- trie.py                # Trie implementations
+|   +-- graph_constrained_decoding.py  # Token-level constraint logic
++-- workflow/                  # Runnable experiment scripts
++-- approach1_cosine/          # Cosine scorer (standalone)
++-- approach2_decomposed/      # Decomposed oracle (standalone)
++-- approach3_symbolic/        # TypeOracle + notebooks
++-- notebooks/                 # Jupyter experiments
++-- paper/                     # LaTeX paper
++-- kg-mini-book/              # Supplementary LaTeX docs
++-- results/                   # Experiment outputs
++-- scripts/                   # Shell scripts
++-- accelerate_configs/        # DeepSpeed configs
++-- resources/                 # Figures
++-- pyproject.toml             # Project metadata
++-- .env.example               # Environment template
+\end{lstlisting}
+
+% =============================================================================
+% Chapter 2: Architecture
+% =============================================================================
+\chapter{Architecture}\label{ch:architecture}
+
+\section{Layer Diagram}
+
+The codebase is organised into three layers:
+
+\begin{verbatim}
+  Layer 3: Workflow Scripts
+  (predict_paths_and_answers.py, predict_symbolic_dca_trie.py,
+   predict_final_answer.py, finetune_kg_specialized_llm.py)
+       |
+       | imports
+       v
+  Layer 2: Core Library (src/)
+  (qa_prompt_builder.py, trie.py, graph_constrained_decoding.py)
+       |
+       | imports
+       v
+  Layer 1: Foundation Modules
+  (src/llms/, src/utils/, approach3_symbolic/type_oracle.py)
+\end{verbatim}
+
+\section{Module Dependency Graph}
+
+\begin{verbatim}
+workflow/predict_paths_and_answers.py
+  +-- src.llms.get_registed_model()       [model factory]
+  +-- src.qa_prompt_builder               [prompts + trie]
+  +-- src.utils.qa_utils.eval_path_result_w_ans  [eval]
+  +-- src.utils (build_graph, dfs, path_to_string)
+
+workflow/predict_symbolic_dca_trie.py
+  +-- src.llms.get_registed_model()
+  +-- src.qa_prompt_builder
+  +-- src.utils.qa_utils
+  +-- approach3_symbolic.type_oracle.TypeOracle
+  +-- src.graph_constrained_decoding.GraphConstrainedDecoding  [v2 only]
+  +-- src.trie.MarisaTrie
+
+src/qa_prompt_builder.py
+  +-- src.utils (build_graph, dfs, path_to_string)
+  +-- src.trie.MarisaTrie
+
+src/llms/__init__.py -> factory
+  +-- base_language_model.py     [abstract base]
+  +-- base_hf_causal_model.py   [HF causal LM wrapper]
+  +-- graph_constrained_decoding_model.py  [HF + trie]
+  +-- llm_proxy.py               [FastChat/OpenAI proxy]
+  +-- chatgpt.py                 [OpenAI direct]
+  +-- conv_prompt.py             [chat templates]
+  +-- model_adapter.py           [prompt adapters]
+\end{verbatim}
+
+\section{Data Flow: Prediction Pipeline}
+
+\begin{verbatim}
+Dataset (HF: rmanluo/RoG-webqsp)
+  |
+  | load_dataset("rmanluo/RoG-webqsp", split="test[:10]")
+  v
+List of samples, each containing:
+  {question, answer, q_entity, a_entity, graph, id}
+  |
+  | For each sample:
+  v
+1. Build NetworkX graph from graph triples
+2. Enumerate candidate paths via DFS (depth = index_path_length)
+3. [Optional] Apply TypeOracle gates to filter paths
+4. Build MarisaTrie from surviving paths
+5. Construct prompt template with question + entities
+6. Call model.generate_sentence(input, trie, ...)
+   |-- GraphConstrainedDecoding masks logits to trie-valid tokens
+   |-- LLM generates path tokens under constraint
+   v
+7. Parse generated text into predictions
+8. Evaluate against ground_truth answers (Hits@1, F1)
+9. [Symbolic-only] Compute SIR metrics
+\end{verbatim}
+
+% =============================================================================
+% Chapter 3: Core Library (src/)
+% =============================================================================
+\chapter{Core Library: \texttt{src/}}\label{ch:src}
+
+\section{\texttt{trie.py} --- Trie Implementations}
+
+This module provides three trie implementations for storing and querying tokenised path sequences.
+
+\subsection{Class \texttt{Trie}}
+
+A pure-Python trie using nested dictionaries. Each node maps a token to the next node:
+
+\begin{lstlisting}
+class Trie:
+    def __init__(self):
+        self._next = {}       # token -> Trie node
+        self._is_end = False  # whether this node ends a complete sequence
+
+    def insert(self, sequence: List[int]) -> None
+    def get(self, prefix: List[int]) -> List[int]
+\end{lstlisting}
+
+\code{get(prefix)} traverses the trie following each token in \code{prefix}, then returns all tokens that validly continue from that point. Returns an empty list if the prefix is invalid.
+
+\subsection{Class \texttt{MarisaTrie}}
+
+Wrapper around \pkg{marisa-trie} (a C extension for efficient prefix tries). Used in production because it is orders of magnitude faster and more memory-efficient than the pure-Python version:
+
+\begin{lstlisting}
+class MarisaTrie:
+    def __init__(self, sequences, max_token_id=None):
+        # sequences: list of list[int], each ending with eos_token_id
+
+    def get(self, prefix: List[int]) -> List[int]
+    def __len__(self) -> int
+    def __getitem__(self, idx: int) -> List[int]
+\end{lstlisting}
+
+\subsection{Key Design Decision}
+
+The trie stores \emph{sequences of token IDs} (not strings). Token sequences end with \code{eos\_token\_id}. The \code{get()} method returns all token IDs that can follow the given prefix, which the constrained decoding module uses to mask the LLM's vocabulary.
+
+\section{\texttt{graph\_constrained\_decoding.py} --- Token-Level Constraint}
+
+This is the core mechanism that guarantees 100\% structural faithfulness.
+
+\begin{lstlisting}
+class GraphConstrainedDecoding:
+    def __init__(self, tokenizer, trie, start_token_ids=None,
+                 end_token_ids=None, enable_constrained_by_default=False):
+        self.all_tokens = list(range(len(tokenizer)))  # full vocabulary
+
+    def allowed_tokens_fn(self, batch_id: int, sent: torch.Tensor):
+        # 1. Check if we've entered a <PATH>...</PATH> block
+        # 2. If inside: return trie.get(sent[L_input:]) as allowed tokens
+        # 3. If outside: return all_tokens (no constraint)
+        # 4. If trie has no valid continuation: fall back to all_tokens
+\end{lstlisting}
+
+\subsection{How It Works}
+
+\begin{enumerate}
+	\item The \code{allowed\_tokens\_fn} is passed to HuggingFace's \code{model.generate()} as the \code{prefix\_allowed\_tokens\_fn} callback.
+	\item At each generation step, the callback checks whether the sequence is inside a constrained block (between \code{<PATH>} and \code{</PATH>} tokens).
+	\item If inside: it looks up the current generation prefix in the trie, and returns only the tokens that are valid continuations.
+	\item If the trie returns no valid tokens (empty list), it falls back to the full vocabulary --- this prevents infinite loops.
+\end{enumerate}
+
+\subsection{Critical Detail}
+
+The trie is built from \emph{path strings} tokenised \emph{without} special tokens (via \code{add\_special\_tokens=False}). The generation prefix used for trie lookup excludes the input prompt length (\code{sent[L\_input:]}), so only the generated portion is matched against the trie.
+
+\section{\texttt{qa\_prompt\_builder.py} --- Prompt Construction}
+
+This module provides a hierarchy of six prompt builder classes:
+
+\subsection{Class Hierarchy}
+
+\begin{verbatim}
+GraphConstrainedPromptBuilder (base)
++-- PathGenerationPromptBuilder       (path-only generation)
++-- JointReasoningPromptBuilder       (path + answer, with PATH_START/END)
+|   +-- PathGenerationWithAnswerPromptBuilder  (joint, used by GCR baseline)
++-- RetrievalPromptBuilder            (entity/relation/triple retrieval)
+PromptBuilder                         (standalone final-answer builder)
+\end{verbatim}
+
+\subsection{Base Class: \texttt{GraphConstrainedPromptBuilder}}
+
+Core methods:
+
+\begin{lstlisting}
+class GraphConstrainedPromptBuilder:
+    def __init__(self, tokenizer, prompt="zero-shot",
+                 undirected=False, index_path_length=2, add_rule=False):
+        # Stores config; loads prompt template by name
+
+    def get_graph_index(self, question_dict):
+        # 1. If question_dict has "paths": use them
+        # 2. Else: build NetworkX graph, run DFS from q_entity
+        # 3. Tokenise path strings, add eos_token_id
+        # 4. Return MarisaTrie(tokenized_paths)
+
+    def process_input(self, question_dict, return_trie=True):
+        # 1. Extract question, start_node, answer_node, choices
+        # 2. Build trie via get_graph_index()
+        # 3. Find ground-truth paths via get_truth_paths()
+        # 4. Format prompt template with question + entities
+        # 5. Return (formatted_input, ground_paths, trie)
+\end{lstlisting}
+
+\subsection{Prompt Templates}
+
+The \code{JointReasoningPromptBuilder} uses a zero-shot template:
+
+\begin{lstlisting}[numbers=none]
+ZERO_SHOT_PROMPT = """Reasoning path is a sequence of triples in the KG
+that connects the topic entities in the question to answer entities.
+It should start with <PATH> and end with </PATH>.
+When given a question, please generate some reasoning paths in the KG
+starting from the topic entities that you believe can aid in answering it.
+Then, use these reasoning paths to derive the answer to the question.
+
+# Question:
+{question}
+# Topic entities:
+{entities}
+"""
+\end{lstlisting}
+
+The \code{<PATH>} and \code{</PATH>} special tokens (defined as \code{PATH\_START\_TOKEN} and \code{PATH\_END\_TOKEN}) act as delimiters that the \code{GraphConstrainedDecoding} module uses to enter/exit constrained mode.
+
+\subsection{Path String Format}
+
+Paths are serialised using the arrow format:
+\begin{lstlisting}[numbers=none]
+Elvis_Presley -> people.person.place_of_birth -> Tupelo
+Elvis_Presley -> people.person.parents -> Vernon_Presley -> people.person.children -> Elvis_Presley
+\end{lstlisting}
+
+The trie is built by tokenising these strings (without special tokens) and appending \code{eos\_token\_id}.
+
+% =============================================================================
+% Chapter 4: Model Layer (src/llms/)
+% =============================================================================
+\chapter{Model Layer: \texttt{src/llms/}}\label{ch:llms}
+
+\section{Architecture Overview}
+
+The \texttt{llms} package implements a model-registry pattern. All model classes inherit from \texttt{BaseLanguageModel} and are registered in \texttt{\_\_init\_\_.py}.
+
+\begin{lstlisting}
+registed_language_models = {
+    'gpt': ChatGPT,
+    'others': HfCausalModel,
+    'gcr': GraphConstrainedDecodingModel,
+    'proxy': LLMProxy,
+}
+
+def get_registed_model(model_name) -> BaseLanguageModel:
+    for key, value in registed_language_models.items():
+        if key in model_name.lower():
+            return value
+    return HfCausalModel  # default
+\end{lstlisting}
+
+The model name is checked as a substring: \code{"gcr-Llama-2-7b-chat-hf"} matches \code{"gcr"} and returns \code{GraphConstrainedDecodingModel}.
+
+\section{\texttt{base\_language\_model.py} --- Abstract Base Class}
+
+Defines the interface:
+
+\begin{lstlisting}
+class BaseLanguageModel:
+    @staticmethod
+    def add_args(parser)          # Add CLI args
+    def load_model(self)          # Load model weights
+    def token_len(self, text)     # Count tokens
+    def prepare_for_inference(self)  # Move to eval mode
+    def prepare_model_prompt(self, input)  # Apply chat template
+    def generate_sentence(self, input, trie, **kwargs)  # Generate
+\end{lstlisting}
+
+\section{\texttt{base\_hf\_causal\_model.py} --- HuggingFace Causal LM}
+
+The most complex module ($\sim$212 lines). Key features:
+
+\subsection{Model Loading}
+
+\begin{lstlisting}
+class HfCausalModel(BaseLanguageModel):
+    def load_model(self):
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_path,
+            torch_dtype=torch.bfloat16,
+            attn_implementation=attn_impl,
+            quantization_config=...,
+            device_map="auto",
+        )
+\end{lstlisting}
+
+Supports four dtypes (\code{fp32}, \code{fp16}, \code{bf16}) and two quantisation modes (\code{4bit}, \code{8bit} via bitsandbytes).
+
+\subsection{Generation Modes}
+
+Five decoding strategies are supported:
+
+\begin{lstlisting}
+if mode == "greedy":
+    generation_config.num_beams = 1
+    generation_config.do_sample = False
+elif mode == "beam":
+    generation_config.num_beams = k
+    generation_config.do_sample = False
+elif mode == "sampling":
+    generation_config.do_sample = True
+    generation_config.temperature = 0.6
+    generation_config.top_p = 0.95
+elif mode == "group-beam":
+    generation_config.num_beams = k
+    generation_config.num_beam_groups = k
+    generation_config.diversity_penalty = 1.0
+    generation_config.do_sample = False
+elif mode == "beam-early-stopping":
+    generation_config.num_beams = k
+    generation_config.early_stopping = True
+\end{lstlisting}
+
+\subsection{Generation Method}
+
+The main generation method handles constrained decoding via the \code{prefix\_allowed\_tokens\_fn} callback:
+
+\begin{lstlisting}
+def generate_sentence(self, input, trie, start_token_ids=None,
+                      end_token_ids=None, enable_constrained_by_default=False):
+    gcr = GraphConstrainedDecoding(
+        self.tokenizer, trie, start_token_ids, end_token_ids,
+        enable_constrained_by_default
+    )
+    inputs = self.tokenizer(input, return_tensors="pt",
+                            add_special_tokens=False).to(self.model.device)
+    outputs = self.model.generate(
+        **inputs,
+        generation_config=self.generation_cfg,
+        prefix_allowed_tokens_fn=gcr.allowed_tokens_fn,
+        ...
+    )
+    return self.tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:],
+                                 skip_special_tokens=True)
+\end{lstlisting}
+
+\subsection{Prompt Preparation}
+
+The \code{prepare\_model\_prompt} method applies the appropriate chat template:
+
+\begin{lstlisting}
+def prepare_model_prompt(self, input):
+    if self.chat_model and self.conv:
+        # For Group-beam and beam modes: apply system + user template
+        self.conv.messages = []
+        self.conv.append_message(self.conv.roles[0], input)
+        self.conv.append_message(self.conv.roles[1], None)
+        return self.conv.get_prompt()
+    else:
+        return input
+\end{lstlisting}
+
+\section{\texttt{graph\_constrained\_decoding\_model.py} --- GCR Model}
+
+A thin subclass of \code{HfCausalModel} that overrides \code{generate\_sentence} to ensure the \code{GraphConstrainedDecoding} callback is properly wired. This is what gets instantiated when the model name contains \code{"gcr"}.
+
+\section{\texttt{llm\_proxy.py} --- FastChat/OpenAI Proxy}
+
+Used when the model name contains \code{"proxy"}. Connects to a FastChat API server (either locally launched or remote):
+
+\begin{lstlisting}
+class LLMProxy(BaseLanguageModel):
+    def __init__(self, args):
+        self.conv_template = args.conv_template
+        self.client = OpenAI(base_url=f"http://{host}:{port}/v1",
+                             api_key="EMPTY")
+
+    def generate_sentence(self, input, trie=None, **kwargs):
+        # FastChat doesn't support constrained decoding natively,
+        # so trie is ignored (standard LLM response, no mask)
+        response = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=[{"role": "user", "content": input}],
+            max_tokens=self.max_new_tokens,
+            temperature=0,
+        )
+        return response.choices[0].message.content
+\end{lstlisting}
+
+\subsection{\texttt{start\_fastchat\_api.py}}
+
+Launches a local FastChat stack as subprocesses:
+\begin{enumerate}
+	\item Controller (port 21001)
+	\item Model worker (loads the model, registers with controller)
+	\item OpenAI-compatible API server (port 8000)
+\end{enumerate}
+
+Uses \code{atexit.register(cleanup)} to kill all subprocesses on exit.
+
+\section{\texttt{conv\_prompt.py} --- Conversation Templates}
+
+A 1,244-line module defining $\sim$40 conversation templates for different chat models. Each template is a \code{Conversation} dataclass:
+
+\begin{lstlisting}
+@dataclass
+class Conversation:
+    system: str                  # System prompt
+    roles: List[str]             # ["user", "assistant"]
+    messages: List[List[str]]    # [[role, message], ...]
+    offset: int
+    sep_style: SeparatorStyle    # How to format the prompt
+    sep: str                     # Separator string
+    sep2: str                    # Secondary separator
+
+    def get_prompt(self) -> str:  # Render to string
+    def append_message(self, role, message):  # Add turn
+    def copy(self):               # Deep copy
+\end{lstlisting}
+
+Registered templates include: Vicuna v0/v1/v1.1/v1.2, Llama-2, Qwen-7B, Mistral, Alpaca, ChatGLM, Falcon, Baichuan, etc.
+
+\section{\texttt{model\_adapter.py} --- Prompt Adapters}
+
+Wraps \code{HfCausalModel} with specific conversation templates:
+
+\begin{lstlisting}
+class LlamaAdapter(HfCausalModel):
+    def __init__(self, args):
+        super().__init__(args)
+        self.conv = conv_templates["llama-2"].copy()
+
+class QwenAdapter(HfCausalModel):
+    def __init__(self, args):
+        super().__init__(args)
+        self.conv = conv_templates["qwen-7b-chat"].copy()
+\end{lstlisting}
+
+\section{\texttt{chatgpt.py} --- OpenAI Direct}
+
+Wraps the OpenAI API with retry logic:
+
+\begin{lstlisting}
+class ChatGPT(BaseLanguageModel):
+    def generate_sentence(self, input, trie=None, **kwargs):
+        for attempt in range(self.retry):
+            response = self.client.chat.completions.create(
+                model=self.model_path or "gpt-4",
+                messages=[{"role": "user", "content": input}],
+                max_tokens=1024,
+            )
+            return response.choices[0].message.content
+\end{lstlisting}
+
+% =============================================================================
+% Chapter 5: Utility Modules (src/utils/)
+% =============================================================================
+\chapter{Utility Modules: \texttt{src/utils/}}\label{ch:utils}
+
+\section{\texttt{graph\_utils.py} --- Graph Operations}
+
+Core graph operations using NetworkX.
+
+\subsection{\texttt{build\_graph}}
+
+\begin{lstlisting}
+def build_graph(graph: list, undirected=False) -> nx.DiGraph | nx.Graph:
+    G = nx.Graph() if undirected else nx.DiGraph()
+    for h, r, t in graph:
+        G.add_edge(h.strip(), t.strip(), relation=r.strip())
+    return G
+\end{lstlisting}
+
+Each triple \code{[head, relation, tail]} becomes a directed edge with a \code{relation} attribute.
+
+\subsection{\texttt{dfs}}
+
+\begin{lstlisting}
+def dfs(graph, start_node_list, max_length):
+    # Enumerate all paths up to max_length from start_node_list
+    # Uses recursion with set-based deduplication
+    # Returns List[List[Tuple[head, relation, tail]]]
+\end{lstlisting}
+
+Time complexity: $O(\overline{d}^k)$ in the worst case, where $\overline{d}$ is average out-degree and $k$ is \code{max\_length}.
+
+\subsection{\texttt{get\_truth\_paths}}
+
+\begin{lstlisting}
+def get_truth_paths(q_entity, a_entity, graph):
+    # Uses nx.all_shortest_paths between each (q_entity, a_entity) pair
+    # Converts node sequences to (head, relation, tail) triples
+    # No hop limit -- uses actual shortest paths
+\end{lstlisting}
+
+\subsection{\texttt{bfs\_with\_rule}}
+
+\begin{lstlisting}
+def bfs_with_rule(graph, start_node, target_rule, max_p=10):
+    # BFS that only follows edges matching target_rule at each depth
+    # target_rule: list of relation strings
+    # Used when rules are predicted and must be followed exactly
+\end{lstlisting}
+
+\subsection{\texttt{get\_simple\_paths}}
+
+Like \code{get\_truth\_paths} but with a configurable \code{hop} cutoff and using \code{nx.all\_simple\_edge\_paths}.
+
+\subsection{\texttt{get\_negative\_paths} / \texttt{get\_random\_paths}}
+
+Generate negative samples via random walks for training. Uses the \pkg{walker} library.
+
+\section{\texttt{qa\_utils.py} --- Evaluation Metrics}
+
+\subsection{Answer Normalisation}
+
+\begin{lstlisting}
+def normalize(s: str) -> str:
+    # Lowercase, remove punctuation, remove articles (a/an/the),
+    # remove <pad> tokens, collapse whitespace
+    return normalized_string
+
+def match(s1: str, s2: str) -> bool:
+    # Returns True if normalized s2 appears as substring of normalized s1
+\end{lstlisting}
+
+\subsection{Per-Sample Metrics}
+
+\begin{lstlisting}
+def eval_acc(prediction, answer):
+    # Accuracy = fraction of answer strings matched in prediction
+    matched = sum(1 for a in answer if match(prediction, a))
+    return matched / len(answer)
+
+def eval_hit(prediction, answer):
+    # Hit = 1 if ANY answer matched, else 0
+    return 1 if any(match(prediction, a) for a in answer) else 0
+
+def eval_f1(prediction_list, answer_list):
+    # F1 = 2 * precision * recall / (precision + recall)
+    # precision = correct_predictions / len(prediction)
+    # recall = matched_answers / len(answer)
+\end{lstlisting}
+
+\subsection{Aggregate Evaluators}
+
+Each aggregate function reads a \code{predictions.jsonl} file, computes per-sample metrics, and writes both a detailed JSONL output and a summary text file:
+
+\begin{description}
+	\item[\texttt{eval\_result}] Basic accuracy/hit/F1/precision/recall.
+	\item[\texttt{eval\_rank\_results}] Top-k metrics (Accuracy@k, Hit@k, F1@k).
+	\item[\texttt{eval\_path\_result}] Path-level metrics (Path F1).
+	\item[\texttt{eval\_path\_result\_w\_ans}] Joint path+answer metrics.
+	\item[\texttt{eval\_joint\_result}] Parses ``Reasoning path:'' / ``the answer is:'' markers.
+\end{description}
+
+\section{\texttt{align\_utils.py} --- Path Alignment}
+
+Used during training to evaluate rule-sequence prediction quality:
+
+\begin{lstlisting}
+def compute_metrics(preds, labels, rel_dict):
+    # Hallucination = relation not in rel_dict
+    # Hit, Precision, Recall, F1 on rule sequences joined by <SEP>
+
+def eval_generation(result_path, rel_dict_path, debug=False):
+    # Reads predictions, computes aggregate metrics
+\end{lstlisting}
+
+\section{\texttt{utils.py} --- File and String Utilities}
+
+\begin{lstlisting}
+def path_to_string(path):
+    # [(h1, r1, t1), (h2, r2, t2)] -> "h1 -> r1 -> t1 -> r2 -> t2"
+
+def load_jsonl(path):
+    # Reads a JSONL file, returns list of parsed dicts
+
+def read_prompt(prompt_path):
+    # Reads a prompt template from a file
+\end{lstlisting}
+
+\section{\texttt{training\_utils.py}}
+
+\begin{lstlisting}
+def resize_tokenizer_and_embedding(tokenizer, model, new_tokens):
+    # Adds new tokens to tokenizer, resizes model embeddings
+\end{lstlisting}
+
+% =============================================================================
+% Chapter 6: Symbolic TypeOracle (Approach 3)
+% =============================================================================
+\chapter{Symbolic TypeOracle}\label{ch:typeoracle}
+
+\section{Location and Purpose}
+
+File: \file{approach3\_symbolic/type\_oracle.py} (586 lines). This is the core of Approach 3 (the symbolic DCA-Trie). It requires no external dependencies beyond Python stdlib --- no PyTorch, no sentence-transformers, no GPU.
+
+\section{Type Constants}
+
+The module defines nine frozen sets of Freebase human-readable type names:
+
+\begin{lstlisting}
+_PERSON_TYPES     = frozenset({"Person", "Politician", "Author", ...})
+_LOCATION_TYPES   = frozenset({"Location", "Country", "City/Town/Village", ...})
+_ORGANIZATION_TYPES = frozenset({"Organization", "Company", ...})
+_CREATIVE_WORK_TYPES = frozenset({"Film", "Book", "TV Program", ...})
+_DATE_TYPES       = frozenset({"Date/Time"})
+_LANGUAGE_TYPES   = frozenset({"Human Language"})
+_AWARD_TYPES      = frozenset({"Award", "Award honor"})
+_PROFESSION_TYPES = frozenset({"Profession"})
+_GENRE_TYPES      = frozenset({"TV Genre", "Music Genre", "Film Genre", ...})
+\end{lstlisting}
+
+These are extracted from \code{common.topic.notable\_types} triples in the WebQSP subgraphs.
+
+\section{Answer Type Inference}
+
+The \code{ANSWER\_TYPE\_MAP} dictionary maps question keywords to expected answer types:
+
+\begin{lstlisting}
+ANSWER_TYPE_MAP = {
+    "who": _PERSON_TYPES,
+    "where": _LOCATION_TYPES,
+    "when": _DATE_TYPES,
+    "movie": _CREATIVE_WORK_TYPES,
+    "award": _AWARD_TYPES,
+    "company": _ORGANIZATION_TYPES,
+    ...
+}
+\end{lstlisting}
+
+The \code{\_QUESTION\_PATTERNS} list contains 19 regex patterns for matching these keywords, with quoted entity mentions masked to avoid false matches.
+
+\section{Relation Schema}
+
+The \code{\_RELATION\_SCHEMA} dictionary maps $\sim$40 Freebase relation IDs to their domain and range type constraints:
+
+\begin{lstlisting}
+_RELATION_SCHEMA = {
+    "people.person.place_of_birth": {
+        "domain": _PERSON_TYPES,
+        "range": _LOCATION_TYPES,
+    },
+    "film.film.directed_by": {
+        "domain": _CREATIVE_WORK_TYPES,
+        "range": _PERSON_TYPES,
+    },
+    ...
+}
+\end{lstlisting}
+
+\section{Class \texttt{TypeOracle}}
+
+\subsection{Construction}
+
+\begin{lstlisting}
+@classmethod
+def from_graph(cls, graph_triples):
+    # Iterates over graph triples, extracting types from:
+    #   - common.topic.notable_types
+    #   - freebase.type_hints.included_types (excluding "Topic" supertype)
+    #   - freebase.type_profile.strict_included_types
+    # Builds Dict[entity_name -> FrozenSet[type_name]]
+    return cls(entity_type_map=frozen)
+\end{lstlisting}
+
+\subsection{Gate 1: Answer Type Gate (\texttt{type\_gate})}
+
+Only applies at the terminal hop of a path:
+
+\begin{lstlisting}
+def type_gate(self, entity_name, answer_types, hop, max_hop):
+    if hop < max_hop:       return True  # non-terminal: always allow
+    if not answer_types:    return True  # no constraint inferred
+    etypes = self._entity_types.get(entity_name, frozenset())
+    if not etypes:          return True  # unknown type: allow
+    return bool(etypes & answer_types)   # must intersect
+\end{lstlisting}
+
+\subsection{Gate 2: Property Range Gate (\texttt{range\_gate})}
+
+Applies at every hop:
+
+\begin{lstlisting}
+def range_gate(self, relation, tail_entity):
+    rel_schema = self._schema.get(relation)
+    if rel_schema is None:   return True  # unknown relation: allow
+    range_types = rel_schema.get("range", frozenset())
+    if not range_types:      return True  # no range constraint: allow
+    etypes = self._entity_types.get(tail_entity, frozenset())
+    if not etypes:           return True  # unknown entity: allow
+    return bool(etypes & range_types)     # must intersect
+\end{lstlisting}
+
+\subsection{Combined Gate}
+
+\begin{lstlisting}
+def is_admissible(self, relation, tail_entity, answer_types, hop, max_hop):
+    return (self.type_gate(tail_entity, answer_types, hop, max_hop)
+            and self.range_gate(relation, tail_entity))
+\end{lstlisting}
+
+\subsection{SIR Computation Helper}
+
+\begin{lstlisting}
+def compute_type_irrelevance(paths, oracle, answer_types, max_hop):
+    # SIR*_type = fraction of paths whose terminal entity type
+    # is incompatible with inferred answer types
+\end{lstlisting}
+
+% =============================================================================
+% Chapter 7: Workflow Scripts
+% =============================================================================
+\chapter{Workflow Scripts}\label{ch:workflow}
+
+\section{\texttt{predict\_paths\_and\_answers.py} --- GCR Baseline}
+
+This is the primary GCR baseline script (184 lines).
+
+\subsection{Data Flow}
+
+\begin{enumerate}
+	\item Load dataset via \code{datasets.load\_dataset(path, split=split)}.
+	\item (Optional) Merge with pre-computed rule predictions.
+	\item Instantiate model via \code{get\_registed\_model(args.model\_name)}.
+	\item Build \code{PathGenerationWithAnswerPromptBuilder}.
+	\item For each sample:
+	      \begin{enumerate}
+		      \item \code{prompt\_builder.process\_input(data)} $\to$ (input, ground\_paths, trie).
+		      \item \code{model.prepare\_model\_prompt(input)} $\to$ formatted prompt.
+		      \item \code{model.generate\_sentence(input, trie, start\_ids, end\_ids)}.
+		      \item Write result to \code{predictions.jsonl}.
+	      \end{enumerate}
+	\item Run \code{eval\_path\_result\_w\_ans(predictions.jsonl)}.
+\end{enumerate}
+
+\subsection{Key Arguments}
+
+\begin{lstlisting}[numbers=none]
+--model_name   gcr-Llama-2-7b-chat-hf  (determines model class via registry)
+--d            RoG-webqsp               (dataset name)
+--split        test[:100]               (split with optional slice)
+--index_path_length 2                   (max DFS depth = k)
+--generation_mode  group-beam           (decoding strategy)
+--k            5                        (beam size / number of paths)
+--prompt_mode  zero-shot                (prompt template)
+\end{lstlisting}
+
+\subsection{Prompt Builder Initialisation}
+
+\begin{lstlisting}
+input_builder = PathGenerationWithAnswerPromptBuilder(
+    model.tokenizer, args.prompt_mode,
+    index_path_length=args.index_path_length,
+    undirected=args.undirected,
+    add_rule=args.add_rule,
+)
+\end{lstlisting}
+
+\subsection{Generation Call}
+
+\begin{lstlisting}
+start_token_ids = model.tokenizer.convert_tokens_to_ids("<PATH>")
+end_token_ids = model.tokenizer.convert_tokens_to_ids("</PATH>")
+prediction = model.generate_sentence(
+    input, trie,
+    start_token_ids=start_token_ids,
+    end_token_ids=end_token_ids,
+    enable_constrained_by_default=False,
+)
+\end{lstlisting}
+
+\section{\texttt{predict\_symbolic\_dca\_trie.py} --- Symbolic DCA-Trie}
+
+The new symbolic approach (625 lines). Supports two modes:
+
+\subsection{V1: Static Filtering (Algorithm 1)}
+
+\begin{enumerate}
+	\item Build \code{TypeOracle.from\_graph(data["graph"])}.
+	\item Infer \code{answer\_types} from question via regex patterns.
+	\item Enumerate paths via DFS (same as GCR).
+	\item For each path:
+	      \begin{enumerate}
+		      \item Check \code{range\_gate} on every hop.
+		      \item Check \code{type\_gate} on terminal hop only.
+	      \end{enumerate}
+	\item Build trie from surviving paths.
+	\item Run standard constrained decoding with the filtered trie.
+\end{enumerate}
+
+Key function:
+
+\begin{lstlisting}
+def build_symbolically_filtered_trie(question_dict, tokenizer,
+                                      index_path_length, undirected):
+    oracle = TypeOracle.from_graph(question_dict["graph"])
+    answer_types = oracle.infer_answer_types(question_dict["question"])
+    paths_list = utils.dfs(g, entities, index_path_length)
+
+    kept = []
+    for p in paths_list:
+        if all(oracle.range_gate(rel, t) for _, rel, t in p):
+            terminal = p[-1][2]
+            if oracle.type_gate(terminal, answer_types, len(p), index_path_length):
+                kept.append(p)
+
+    kept_str = [path_to_string(p) for p in kept]
+    trie = build_trie_from_paths(kept_str, tokenizer, tokenizer.eos_token_id)
+    return trie, kept_str, oracle, ...
+\end{lstlisting}
+
+\subsection{V2: Step-Wise Expansion (Algorithm 2)}
+
+No upfront path enumeration. Instead:
+
+\begin{enumerate}
+	\item Start with first-hop neighbours of the topic entity, filtered by \code{range\_gate}.
+	\item Build a small trie of these single-hop paths.
+	\item Run constrained generation for one step.
+	\item Extract the committed entity from the model output.
+	\item Query its neighbours, gate them, build a new trie.
+	\item Repeat until end token or max hops reached.
+\end{enumerate}
+
+\subsection{SIR Computation}
+
+\begin{lstlisting}
+def compute_sir_metrics(paths_before, paths_after,
+                         n_range_blocked, n_type_blocked, ...):
+    sir = (paths_before - paths_after) / paths_before
+    sir_type = n_type_blocked / paths_before
+    sir_traj = n_range_blocked / paths_before
+    return {"sir": sir, "sir_type": sir_type, "sir_traj": sir_traj, ...}
+
+def compute_false_negative_rates(dataset, index_path_length, undirected):
+    # For each gold path, check if type_gate or range_gate would exclude it
+    # Returns FNR_type and FNR_range
+\end{lstlisting}
+
+\section{\texttt{predict\_final\_answer.py} --- Answer-Only Prediction}
+
+Runs final answer prediction using a configured LLM (341 lines). Supports:
+\begin{itemize}
+	\item \textbf{No-path mode}: Direct question answering (zero-shot baseline).
+	\item \textbf{Rule-based}: Applies predicted relation rules via BFS.
+	\item \textbf{Path-based}: Feeds predicated paths as context.
+	\item \textbf{GCR mode}: Constrained decoding for answer generation.
+	\item \textbf{Multi-process}: Pool-based parallel inference.
+	\item \textbf{Simple/edge graph}: Alternative context formats.
+\end{itemize}
+
+\section{\texttt{finetune\_kg\_specialized\_llm.py} --- Training}
+
+Supervised fine-tuning script (247 lines) using \code{trl.SFTTrainer}:
+
+\begin{lstlisting}
+class ScriptArguments:
+    data_path_list: List[str]   # Training data directories
+    model_name_or_path: str     # Base model
+    use_peft: bool              # Enable LoRA
+    lora_r: int = 8
+    lora_alpha: float = 16
+    lora_dropout: float = 0.05
+    load_in_4bit: bool = False
+    load_in_8bit: bool = False
+    n_path_per_sample: int = 10
+    response_template: str = "[/INST]"
+\end{lstlisting}
+
+\subsection{Training Data Format}
+
+Each training sample is a question paired with sampled reasoning paths:
+
+\begin{lstlisting}[numbers=none]
+{
+  "question": "what award did elvis presley win in 1971?",
+  "paths": [
+    "Elvis_Presley -> award.award_winner.awards_won -> Grammy_Award ...",
+    ...
+  ],
+  "answer": ["Grammy Award"]
+}
+\end{lstlisting}
+
+The \code{DataCollatorForCompletionOnlyLM} masks the question tokens, so the loss is computed only on the path and answer tokens.
+
+\subsection{LoRA Configuration}
+
+\begin{lstlisting}
+peft_config = LoraConfig(
+    r=args.lora_r, lora_alpha=args.lora_alpha,
+    lora_dropout=args.lora_dropout,
+    target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+    bias="none", task_type="CAUSAL_LM",
+)
+\end{lstlisting}
+
+\section{\texttt{build\_graph\_index.py} and \texttt{build\_shortest\_path\_index.py}}
+
+Pre-computation scripts that run DFS / shortest-path enumeration and save the results to disk via \code{datasets.save\_to\_disk}. This avoids re-running expensive path enumeration during training or inference.
+
+% =============================================================================
+% Chapter 8: Metrics and Evaluation
+% =============================================================================
+\chapter{Metrics and Evaluation}\label{ch:metrics}
+
+\section{Answer Metrics}
+
+These compare the model's predicted answer string(s) against ground-truth answer strings.
+
+\subsection{Accuracy (Per-Sample)}
+
+\begin{definition}[Answer Accuracy]
+	For a single sample, let $\mathcal{A}_{\text{pred}}$ be the prediction string and $\mathcal{A}_{\text{gt}}$ be the set of ground-truth answer strings.
+	$$\text{Acc} = \frac{1}{|\mathcal{A}_{\text{gt}}|} \sum_{a \in \mathcal{A}_{\text{gt}}} \mathbbm{1}[a \subseteq_{\text{norm}} \mathcal{A}_{\text{pred}}]$$
+	where $\subseteq_{\text{norm}}$ is substring matching after normalisation (lowercase, strip punctuation, remove articles, collapse whitespace).
+\end{definition}
+
+\subsection{Hit@1 (Per-Sample)}
+
+\begin{definition}[Hit@1]
+	$$\text{Hit} = \mathbbm{1}\!\left[ \bigvee_{a \in \mathcal{A}_{\text{gt}}} a \subseteq_{\text{norm}} \mathcal{A}_{\text{pred}} \right]$$
+	Returns 1 if any ground-truth answer is found in the prediction, 0 otherwise.
+\end{definition}
+
+\subsection{F1 Score}
+
+\begin{definition}[Answer F1]
+	When predictions are a list of strings (parsed from multi-line output), compute:
+	\begin{align*}
+		\text{Precision} & = \frac{|\{\text{predicted answers that match any ground truth}\}|}{|\text{predicted}|}   \\
+		\text{Recall}    & = \frac{|\{\text{ground-truth answers found in any prediction}\}|}{|\text{ground truth}|} \\
+		\text{F1}        & = \frac{2 \cdot \text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}}
+	\end{align*}
+\end{definition}
+
+\subsection{Aggregate Metrics}
+
+For an entire dataset, metrics are averaged over all samples:
+$$\text{Hits@1} = \frac{1}{N} \sum_{i=1}^N \text{Hit}_i$$
+$$\overline{\text{F1}} = \frac{1}{N} \sum_{i=1}^N \text{F1}_i$$
+
+\section{Path Metrics}
+
+These evaluate the quality of generated KG reasoning paths.
+
+\subsection{Path F1}
+
+Compares generated paths (as strings) against ground-truth paths using the same F1 formula but where ``answers'' are path strings.
+
+\subsection{Path-Answer F1}
+
+A compound metric: paths and answers are parsed jointly from the model output. The path portion is compared against ground-truth paths, and the answer portion against ground-truth answers.
+
+\subsection{Structural Faithfulness}
+
+For constrained-decoding methods (GCR, DCA-Trie), this is always 100\%: every generated path is guaranteed to exist in the KG because the trie is built from KG-valid paths only.
+
+\section{Semantic Irrelevance Ratio (SIR)}
+
+Introduced by the DCA-Trie project to measure how many semantically irrelevant paths remain in the constraint set after pruning.
+
+\subsection{Overall SIR}
+
+\begin{definition}[SIR]
+	$$\text{SIR} = \frac{|\mathcal{P}_{\text{full}}| - |\mathcal{P}_{\text{pruned}}|}{|\mathcal{P}_{\text{full}}|} = \frac{N_{\text{pruned}}}{N_{\text{full}}}$$
+	where $\mathcal{P}_{\text{full}}$ is the set of all KG-valid paths (the GCR constraint set) and $\mathcal{P}_{\text{pruned}}$ is the set after DCA-Trie gates are applied.
+\end{definition}
+
+\subsection{Decomposed SIR}
+
+\begin{align*}
+	\text{SIR}_{\text{type}} & = \frac{N_{\text{type-blocked}}}{N_{\text{full}}}  \\
+	\text{SIR}_{\text{traj}} & = \frac{N_{\text{range-blocked}}}{N_{\text{full}}}
+\end{align*}
+
+\subsection{Interpretation}
+
+\begin{itemize}
+	\item $\text{SIR} = 0$ means no paths were pruned (no improvement over GCR).
+	\item $\text{SIR} = 0.40$ means 40\% of paths were pruned (constraint set reduced).
+	\item High $\text{SIR}_{\text{type}}$ indicates many terminal entities have incompatible types with the question.
+	\item High $\text{SIR}_{\text{traj}}$ indicates many intermediate hops violate range constraints.
+\end{itemize}
+
+\section{False Negative Rate (FNR)}
+
+Measures the fraction of gold-truth paths that would be excluded by each gate:
+
+\begin{definition}[FNR]
+	$$\text{FNR}_{\text{gate}} = \frac{N_{\text{gold paths excluded by gate}}}{N_{\text{total gold paths}}}$$
+\end{definition}
+
+A safe gate should have $\text{FNR} = 0$ (never exclude a valid answer path). The DCA-Trie TypeOracle achieves 0\% FNR on both gates across WebQSP.
+
+\section{Hallucination Ratio}
+
+From \file{align\_utils.py}: fraction of generated relation tokens that are not present in the KG's relation vocabulary. Relevant for non-constrained methods. For constrained decoding, this is always 0.
+
+% =============================================================================
+% Chapter 9: Dependencies and Environment
+% =============================================================================
+\chapter{Dependencies and Environment}\label{ch:deps}
+
+\section{Critical Dependencies}
+
+\begin{longtable}{lp{3.5cm}p{8cm}}
+	\caption{Critical dependencies}
+	\label{tab:deps}                                                                                   \\
+	\toprule
+	Package               & Version     & Role                                                         \\
+	\midrule
+	\endfirsthead
+	\caption[]{Critical dependencies (continued)}                                                      \\
+	\toprule
+	Package               & Version     & Role                                                         \\
+	\midrule
+	\endhead
+	\bottomrule
+	\endfoot
+	\texttt{torch}        & $\ge$2.0    & Core tensor operations, model inference                      \\
+	\texttt{transformers} & 4.44.x      & HuggingFace model loading, tokenization, generation pipeline \\
+	\texttt{accelerate}   & $\ge$0.30.1 & Multi-GPU distributed inference/training                     \\
+	\texttt{datasets}     & $\ge$2.19.2 & Dataset loading (HuggingFace hub), saving/loading indexes    \\
+	\texttt{marisa-trie}  & $\ge$1.2.0  & Efficient prefix trie (C extension) for constrained decoding \\
+	\texttt{networkx}     & any         & Graph construction, DFS, shortest paths                      \\
+	\texttt{scikit-learn} & $\ge$1.5.0  & \texttt{cosine\_similarity}, \texttt{precision\_score}       \\
+	\texttt{peft}         & $\ge$0.11.1 & LoRA/QLoRA for efficient fine-tuning                         \\
+	\texttt{trl}          & $\ge$0.9.4  & SFTTrainer with completion-only LM collator                  \\
+	\texttt{bitsandbytes} & $\ge$0.43.1 & 4-bit/8-bit quantisation (optional)                          \\
+\end{longtable}
+
+\section{Optional Dependencies}
+
+\begin{longtable}{lp{3cm}p{9cm}}
+	\caption{Optional dependencies}
+	\label{tab:deps-opt}                                                                  \\
+	\toprule
+	Package                        & Version     & Role                                   \\
+	\midrule
+	\endfirsthead
+	\caption[]{Optional dependencies (continued)}                                         \\
+	\toprule
+	Package                        & Version     & Role                                   \\
+	\midrule
+	\endhead
+	\bottomrule
+	\endfoot
+	\texttt{deepspeed}             & $\ge$0.14.2 & ZeRO-3 optimisation for large models   \\
+	\texttt{sentence-transformers} & any         & Embedding models for Approach 1/2      \\
+	\texttt{openai}                & $\ge$1.31.1 & OpenAI API client (GPT-4/3.5)          \\
+	\texttt{tiktoken}              & $\ge$0.7.0  & Fast token counting for GPT models     \\
+	\texttt{wandb}                 & $\ge$0.17.1 & Experiment logging (Weights \& Biases) \\
+	\texttt{sentencepiece}         & $\ge$0.2.0  & Tokenization for some models           \\
+	\texttt{walker}                & any         & Random walks for negative sampling     \\
+	\texttt{python-dotenv}         & $\ge$1.0.1  & Loading \texttt{.env} for API keys     \\
+\end{longtable}
+
+\section{Environment Variables}
+
+\begin{longtable}{lp{4cm}p{8cm}}
+	\caption{Environment variables}
+	\label{tab:env}                                                                                    \\
+	\toprule
+	Variable                        & Default          & Purpose                                       \\
+	\midrule
+	\endfirsthead
+	\caption[]{Environment variables (continued)}                                                      \\
+	\toprule
+	Variable                        & Default          & Purpose                                       \\
+	\midrule
+	\endhead
+	\bottomrule
+	\endfoot
+	\texttt{OPENAI\_API\_KEY}       & \texttt{sk-xx}   & API key for OpenAI/GPT access                 \\
+	\texttt{HF\_TOKEN}              & \texttt{hf\_xxx} & HuggingFace authentication (for gated models) \\
+	\texttt{OPENAI\_ORG}            & (none)           & OpenAI organisation ID                        \\
+	\texttt{OPENAI\_BASE\_URL}      & (none)           & Custom API base URL (for FastChat proxies)    \\
+	\texttt{SLURM\_CPUS\_PER\_TASK} & (none)           & CPU count override for Slurm environments     \\
+\end{longtable}
+
+\section{Python Concepts}
+
+The codebase demonstrates several important Python patterns:
+
+\subsection{Model Registry Pattern}
+
+\file{src/llms/\_\_init\_\_.py} implements a registry where model classes map to name substrings. This enables selecting inference backends via a single CLI argument:
+
+\begin{lstlisting}
+def get_registed_model(model_name):
+    for key, value in registed_language_models.items():
+        if key in model_name.lower():
+            return value
+    return HfCausalModel  # fallback
+\end{lstlisting}
+
+Usage: \code{gcr-Llama-2-7b-chat-hf} $\to$ \code{GraphConstrainedDecodingModel}, \code{proxy-qwen2.5-3b} $\to$ \code{LLMProxy}.
+
+\subsection{Factory Method with CLI Integration}
+
+Model classes expose both constructor and CLI configuration via \code{add\_args}:
+
+\begin{lstlisting}
+LLM = get_registed_model(args.model_name)
+LLM.add_args(parser)           # Each model registers its own args
+args = parser.parse_args()     # Re-parse with new args registered
+model = LLM(args)              # Construct with parsed args
+\end{lstlisting}
+
+\subsection{Chat Template Pattern}
+
+\file{conv\_prompt.py} implements a builder-pattern for chat templates:
+
+\begin{lstlisting}
+conv = Conversation(
+    system="You are a helpful AI assistant.",
+    roles=["USER", "ASSISTANT"],
+    sep_style=SeparatorStyle.ADD_COLON_TWO,
+    sep=" ", sep2="</s>",
+)
+conv.append_message(conv.roles[0], "What is the capital of France?")
+conv.append_message(conv.roles[1], None)
+prompt = conv.get_prompt()
+# "USER: What is the capital of France?\nASSISTANT:"
+\end{lstlisting}
+
+\subsection{Prefix-Allowed-Tokens Callback}
+
+A HuggingFace generation callback that constrains the vocabulary at each step:
+
+\begin{lstlisting}
+model.generate(
+    ...,
+    prefix_allowed_tokens_fn=lambda batch_id, sent: allowed_tokens,
+)
+\end{lstlisting}
+
+The callback receives the batch index and the current token sequence, and returns a list of allowed token IDs for the next step.
+
+\subsection{Frozen Sets for Type Safety}
+
+The TypeOracle uses \code{FrozenSet[str]} for immutable type collections. This enables O(1) set intersection checks with hashing:
+
+\begin{lstlisting}
+return bool(etypes & answer_types)  # O(min(|etypes|, |answer_types|))
+\end{lstlisting}
+
+\subsection{Lazy Initialisation and Singleton Workers}
+
+\file{start\_fastchat\_api.py} launches compute-heavy subprocesses lazily and cleans them up with \code{atexit}:
+
+\begin{lstlisting}
+import atexit, subprocess
+
+def start_api():
+    controller = subprocess.Popen([...])
+    worker = subprocess.Popen([...])
+    server = subprocess.Popen([...])
+    atexit.register(lambda: (controller.kill(), worker.kill(), server.kill()))
+    return server
+\end{lstlisting}
+
+\section{Package Management}
+
+The project uses \textbf{Poetry} for dependency management. Key details from \file{pyproject.toml}:
+
+\begin{lstlisting}[numbers=none]
+[tool.poetry.dependencies]
+python = ">=3.10"
+torch = ">=2.0"
+transformers = "4.44.2"
+datasets = ">=2.19.2"
+accelerate = ">=0.30.1"
+peft = ">=0.11.1"
+trl = ">=0.9.4"
+marisa-trie = ">=1.2.0"
+scikit-learn = ">=1.5.0"
+networkx = "*"
+openai = ">=1.31.1"
+tiktoken = ">=0.7.0"
+wandb = ">=0.17.1"
+\end{lstlisting}
+
+To install:
+\begin{lstlisting}[numbers=none,frame=none]
+poetry install
+# or: pip install -r requirements.txt
+\end{lstlisting}
+
+% =============================================================================
+% Chapter 10: Experiment Workflows
+% =============================================================================
+\chapter{Experiment Workflows}\label{ch:workflows}
+
+\section{Zero-Shot Baseline}
+
+\begin{lstlisting}[numbers=none,frame=none]
+python workflow/predict_final_answer.py \
+    --model_name proxy-qwen2.5-3b \
+    --d RoG-webqsp \
+    --split "test[:10]"
+\end{lstlisting}
+
+Uses \code{LLMProxy} to connect to a FastChat server running Qwen2.5-3B. No path generation or constrained decoding.
+
+\section{GCR Baseline}
+
+\begin{lstlisting}[numbers=none,frame=none]
+python workflow/predict_paths_and_answers.py \
+    --model_name gcr-qwen2.5-3b \
+    --d RoG-webqsp \
+    --split "test[:10]" \
+    --index_path_length 2 \
+    --generation_mode group-beam \
+    --k 5 \
+    --prompt_mode zero-shot
+\end{lstlisting}
+
+Builds a full KG trie, runs constrained decoding with \code{GraphConstrainedDecodingModel}. The model name contains \code{"gcr"} so the GCR model class is used.
+
+\section{DCA-Trie v1 (Symbolic)}
+
+\begin{lstlisting}[numbers=none,frame=none]
+python workflow/predict_symbolic_dca_trie.py \
+    --model_name gcr-qwen2.5-3b \
+    --d RoG-webqsp \
+    --split "test[:10]" \
+    --dca_mode v1 \
+    --index_path_length 2 \
+    --generation_mode group-beam \
+    --k 5 \
+    --prompt_mode zero-shot
+\end{lstlisting}
+
+Same as GCR, but paths are filtered through TypeOracle gates before trie construction. Reports SIR and FNR metrics.
+
+\section{DCA-Trie v2 (Step-Wise)}
+
+\begin{lstlisting}[numbers=none,frame=none]
+python workflow/predict_symbolic_dca_trie.py \
+    --model_name gcr-qwen2.5-3b \
+    --d RoG-webqsp \
+    --split "test[:10]" \
+    --dca_mode v2 \
+    --index_path_length 2
+\end{lstlisting}
+
+Custom generation loop that expands the trie dynamically. V2 does not use the standard \code{generate\_sentence} interface; it calls \code{model.model.generate()} directly with a per-step trie update.
+
+\section{Graph Index Pre-Computation}
+
+\begin{lstlisting}[numbers=none,frame=none]
+python workflow/build_graph_index.py \
+    --data_path rmanluo \
+    --d RoG-webqsp \
+    --split test \
+    --K 2
+\end{lstlisting}
+
+Useful for large-scale experiments: pre-compute all DFS paths and save to disk, avoiding repeated computation across runs.
+
+\section{Fine-Tuning a KG-Specialised LLM}
+
+\begin{lstlisting}[numbers=none,frame=none]
+python workflow/finetune_kg_specialized_llm.py \
+    --model_name_or_path meta-llama/Llama-2-7b-chat-hf \
+    --use_peft True \
+    --lora_r 8 \
+    --load_in_4bit True \
+    --n_path_per_sample 10 \
+    --response_template "[/INST]"
+\end{lstlisting}
+
+Trains using SFT with LoRA adapters. Each training sample is a (question, reasoning-paths, answer) triple. Only the assistant response (paths + answer) is used for loss computation.
+
+% =============================================================================
+% Chapter 11: CLI Reference
+% =============================================================================
+\chapter{CLI Reference}\label{ch:cli}
+
+\section{Global Arguments}
+
+\begin{longtable}{lp{3cm}p{2cm}p{6cm}}
+	\caption{Arguments common across workflow scripts}
+	\label{tab:cli-global}                                                                                \\
+	\toprule
+	Flag                   & Type & Default                   & Description                               \\
+	\midrule
+	\endfirsthead
+	\caption[]{Arguments common across workflow scripts (continued)}                                      \\
+	\toprule
+	Flag                   & Type & Default                   & Description                               \\
+	\midrule
+	\endhead
+	\bottomrule
+	\endfoot
+	\code{--data\_path}    & str  & \texttt{rmanluo}          & HuggingFace dataset hub path/organisation \\
+	\code{--d} / \code{-d} & str  & \texttt{RoG-webqsp}       & Dataset name                              \\
+	\code{--split}         & str  & \texttt{test[:100]}       & Dataset split (supports slicing)          \\
+	\code{--predict\_path} & str  & \texttt{results/GenPaths} & Output directory                          \\
+	\code{--force}         & flag & \texttt{False}            & Overwrite existing results                \\
+	\code{--n}             & int  & 1                         & Number of parallel processes              \\
+	\code{--debug}         & flag & \texttt{False}            & Print debug output                        \\
+\end{longtable}
+
+\section{Model Arguments}
+
+\begin{longtable}{lp{3.5cm}p{2.5cm}p{6cm}}
+	\caption{Model configuration arguments}
+	\label{tab:cli-model}                                                                                                            \\
+	\toprule
+	Flag                          & Type & Default                         & Description                                             \\
+	\midrule
+	\endfirsthead
+	\caption[]{Model configuration arguments (continued)}                                                                            \\
+	\toprule
+	Flag                          & Type & Default                         & Description                                             \\
+	\midrule
+	\endhead
+	\bottomrule
+	\endfoot
+	\code{--model\_name}          & str  & \texttt{gcr-Llama-2-7b-chat-hf} & Model name (determines registry lookup)                 \\
+	\code{--model\_path}          & str  & \texttt{meta-llama/...}         & HuggingFace model path                                  \\
+	\code{--maximun\_token}       & int  & 4096                            & Max input token budget                                  \\
+	\code{--max\_new\_tokens}     & int  & 1024                            & Max tokens to generate                                  \\
+	\code{--dtype}                & str  & \texttt{bf16}                   & Precision (\texttt{fp32}, \texttt{fp16}, \texttt{bf16}) \\
+	\code{--quant}                & str  & \texttt{none}                   & Quantisation (\texttt{4bit}, \texttt{8bit})             \\
+	\code{--attn\_implementation} & str  & \texttt{flash\_attention\_2}    & Attention backend                                       \\
+	\code{--generation\_mode}     & str  & \texttt{greedy}                 & Decoding strategy                                       \\
+	\code{--k}                    & int  & 1                               & Beam size / number of sequences                         \\
+	\code{--chat\_model}          & bool & \texttt{true}                   & Apply chat template                                     \\
+\end{longtable}
+
+\section{Decoding Strategies}
+
+\begin{longtable}{lp{5cm}p{8cm}}
+	\caption{Supported decoding strategies}
+	\label{tab:decoding}                                                                                            \\
+	\toprule
+	Mode                         & Behaviour                                         & Typical use                  \\
+	\midrule
+	\endfirsthead
+	\caption[]{Supported decoding strategies (continued)}                                                           \\
+	\toprule
+	Mode                         & Behaviour                                         & Typical use                  \\
+	\midrule
+	\endhead
+	\bottomrule
+	\endfoot
+	\texttt{greedy}              & Argmax at each step                               & Fast, deterministic baseline \\
+	\texttt{beam}                & Beam search with \texttt{num\_beams}=k            & High-quality single path     \\
+	\texttt{sampling}            & Multinomial with temperature=0.6, top-p=0.95      & Diverse paths                \\
+	\texttt{group-beam}          & Diverse beam search, \texttt{num\_beam\_groups}=k & Diverse high-quality paths   \\
+	\texttt{beam-early-stopping} & Beam search with early stopping                   & Faster beam search           \\
+\end{longtable}
+
+\section{DCA-Trie Specific Arguments}
+
+\begin{longtable}{lp{3cm}p{2cm}p{6cm}}
+	\caption{DCA-Trie workflow arguments}
+	\label{tab:cli-dca}                                                                                                \\
+	\toprule
+	Flag                         & Type & Default            & Description                                             \\
+	\midrule
+	\endfirsthead
+	\caption[]{DCA-Trie workflow arguments (continued)}                                                                \\
+	\toprule
+	Flag                         & Type & Default            & Description                                             \\
+	\midrule
+	\endhead
+	\bottomrule
+	\endfoot
+	\code{--dca\_mode}           & str  & \texttt{v1}        & \texttt{v1} (static) or \texttt{v2} (step-wise)         \\
+	\code{--prompt\_mode}        & str  & \texttt{zero-shot} & Prompt template (\texttt{zero-shot}, \texttt{few-shot}) \\
+	\code{--index\_path\_length} & int  & 2                  & Max DFS depth (k)                                       \\
+	\code{--undirected}          & bool & \texttt{False}     & Treat graph as undirected                               \\
+	\code{--n\_data}             & int  & \texttt{None}      & Samples for FNR analysis                                \\
+	\code{--add\_rule}           & flag & \texttt{False}     & Use pre-predicted rules                                 \\
+	\code{--rule\_path}          & str  & (long default)     & Path to rule predictions                                \\
+\end{longtable}
+
+\section{Training Arguments}
+
+\begin{longtable}{lp{3.5cm}p{2.5cm}p{5.5cm}}
+	\caption{Training-specific arguments}
+	\label{tab:cli-train}                                                                \\
+	\toprule
+	Flag                          & Type  & Default          & Description               \\
+	\midrule
+	\endfirsthead
+	\caption[]{Training-specific arguments (continued)}                                  \\
+	\toprule
+	Flag                          & Type  & Default          & Description               \\
+	\midrule
+	\endhead
+	\bottomrule
+	\endfoot
+	\code{--use\_peft}            & bool  & \texttt{False}   & Enable LoRA               \\
+	\code{--lora\_r}              & int   & 8                & LoRA rank                 \\
+	\code{--lora\_alpha}          & float & 16               & LoRA scaling              \\
+	\code{--lora\_dropout}        & float & 0.05             & LoRA dropout              \\
+	\code{--load\_in\_4bit}       & bool  & \texttt{False}   & 4-bit quantisation        \\
+	\code{--n\_path\_per\_sample} & int   & 10               & Training paths per sample \\
+	\code{--response\_template}   & str   & \texttt{[/INST]} & SFT response marker       \\
+\end{longtable}
+
+% =============================================================================
+% Chapter 12: Frequently Asked Questions
+% =============================================================================
+\chapter{Frequently Asked Questions}\label{ch:faq}
+
+\section{Architecture and Design}
+
+\begin{enumerate}
+
+	\item \textbf{Why are there three trie implementations in \texttt{trie.py}?}
+
+	      The pure-Python \code{Trie} class is the reference implementation. \code{MarisaTrie} wraps the \pkg{marisa-trie} C extension for production use (10-100$\times$ faster). The \code{DummyTrie*} stubs are unused placeholders from an earlier design iteration.
+
+	\item \textbf{Why does \texttt{get\_registed\_model} use substring matching?}
+
+	      This allows the model name CLI argument to simultaneously serve as both the registry key and the human-readable label for output directories. \code{gcr-Llama-2-7b-chat-hf} contains \code{"gcr"} so it selects \code{GraphConstrainedDecodingModel}, and the full string is used for organising results.
+
+	\item \textbf{How does the trie interact with the LLM tokenizer?}
+
+	      The trie stores token IDs, not tokens. Path strings are tokenised with \code{add\_special\_tokens=False} so there are no BOS/EOS tokens inside the paths. The \code{eos\_token\_id} marks the end of each complete path sequence. During generation, \code{GraphConstrainedDecoding.allowed\_tokens\_fn()} strips the input prompt length from the prefix before looking up the trie.
+
+\end{enumerate}
+
+\section{Evaluation}
+
+\begin{enumerate}
+
+	\item \textbf{Why define both Accuracy and Hit?}
+
+	      Accuracy measures how many of the expected answers were found (useful for multi-answer questions). Hit measures whether at least one correct answer was found (useful for questions with a single expected answer). The distinction matters for questions like ``Name all children of Elvis Presley'' where partial coverage should be rewarded.
+
+	\item \textbf{What does SIR measure that simple pruning ratio does not?}
+
+	      Simple pruning ratio measures the number of paths removed. SIR formalises this into a normalised ratio and decomposes it into type-gate and range-gate components, enabling per-gate analysis. A high $\text{SIR}_{\text{type}}$ with low $\text{SIR}_{\text{traj}}$ indicates the type gate is doing most of the work.
+
+	\item \textbf{Why include FNR analysis?}
+
+	      FNR validates that the symbolic gates are \emph{safe} --- they should never exclude a gold-truth path. A non-zero FNR would mean the oracle is over-pruning, potentially reducing recall even if precision improves. The experiment confirms 0\% FNR for both gates on WebQSP.
+
+\end{enumerate}
+
+\section{Troubleshooting}
+
+\begin{enumerate}
+
+	\item \textbf{\texttt{Model is not found in the registed\_language\_models, return HfCausalModel by default}}
+
+	      This message appears when the model name doesn't contain \code{gpt}, \code{gcr}, \code{proxy}, or \code{others}. The script falls back to \code{HfCausalModel}, which does not support the \code{generate\_sentence} method with trie constraints. Either rename the model to include \code{gcr} or use a matching prefix.
+
+	\item \textbf{\texttt{AttributeError: 'LLMProxy' object has no attribute 'prepare\_model\_prompt'}}
+
+	      \code{LLMProxy} originally lacked this method. It needs a pass-through that returns the input unchanged. This was fixed in the codebase.
+
+	\item \textbf{\texttt{ValueError: The template name is not valid.}}
+
+	      The \code{prompt\_mode} argument must be one of \code{zero-shot}, \code{mcq-zero-shot}, or \code{few-shot}. These map to prompt template attributes via string upper-and-replace (\code{zero-shot} $\to$ \code{ZERO\_SHOT\_PROMPT}).
+
+\end{enumerate}
+
+\section{Performance}
+
+\begin{enumerate}
+
+	\item \textbf{Why is Approach 3 faster than GCR?}
+
+	      GCR builds a trie over all $O(\overline{d}^k)$ paths. DCA-Trie v1 filters paths before building the trie, reducing the trie size by 30-45\%. DCA-Trie v2 never enumerates all paths --- it expands incrementally, keeping only $O(\overline{d})$ paths in memory at any point.
+
+	\item \textbf{When should I use v2 instead of v1?}
+
+	      Use v1 when memory for the full path set is acceptable and you want deterministic the same trie structure as GCR (for fair comparison). Use v2 when path count is very large ($k \ge 3$ or $\overline{d} \gg 20$) and memory is a concern.
+
+	\item \textbf{Can I run on CPU only?}
+
+	      Yes. The symbolic TypeOracle (Approach 3) runs entirely on CPU. For model inference, use a small model (Llama-2-7B or smaller) with CPU offloading or quantisation.
+
+\end{enumerate}
+
+\backmatter
+
+\chapter{Appendix: Quick Reference}
+
+\section{File Function Map}
+
+\begin{longtable}{lp{8cm}}
+	\caption{File function map}
+	\label{tab:file-map}                                                                                   \\
+	\toprule
+	File                                              & What to use it for                                 \\
+	\midrule
+	\endfirsthead
+	\caption[]{File function map (continued)}                                                              \\
+	\toprule
+	File                                              & What to use it for                                 \\
+	\midrule
+	\endhead
+	\bottomrule
+	\endfoot
+	\file{workflow/predict\_paths\_and\_answers.py}   & Run GCR baseline constrained decoding              \\
+	\file{workflow/predict\_symbolic\_dca\_trie.py}   & Run symbolic DCA-Trie (v1 or v2)                   \\
+	\file{workflow/predict\_final\_answer.py}         & Run zero-shot or path-augmented answer prediction  \\
+	\file{workflow/finetune\_kg\_specialized\_llm.py} & Fine-tune a model with LoRA for KG path generation \\
+	\file{workflow/build\_graph\_index.py}            & Pre-compute DFS path indices                       \\
+	\file{src/qa\_prompt\_builder.py}                 & Understand/modify prompt templates                 \\
+	\file{src/trie.py}                                & Understand/modify trie implementations             \\
+	\file{src/graph\_constrained\_decoding.py}        & Understand/modify token-level constraints          \\
+	\file{src/llms/base\_hf\_causal\_model.py}        & Modify model loading or generation logic           \\
+	\file{approach3\_symbolic/type\_oracle.py}        & Modify/extend symbolic gates                       \\
+	\file{src/utils/qa\_utils.py}                     & Understand/modify evaluation metrics               \\
+	\file{src/utils/graph\_utils.py}                  & Modify graph construction or path enumeration      \\
+\end{longtable}
+
+\section{Python Invocations Quick Reference}
+
+\begin{lstlisting}[numbers=none,frame=none]
+# GCR baseline
+python workflow/predict_paths_and_answers.py \
+    --model_name gcr-qwen2.5-3b \
+    --d RoG-webqsp --split "test[:10]" \
+    --index_path_length 2 \
+    --generation_mode group-beam --k 5
+
+# DCA-Trie v1
+python workflow/predict_symbolic_dca_trie.py \
+    --model_name gcr-qwen2.5-3b \
+    --d RoG-webqsp --split "test[:10]" \
+    --dca_mode v1 --index_path_length 2 \
+    --generation_mode group-beam --k 5
+
+# DCA-Trie v2
+python workflow/predict_symbolic_dca_trie.py \
+    --model_name gcr-qwen2.5-3b \
+    --d RoG-webqsp --split "test[:10]" \
+    --dca_mode v2 --index_path_length 2
+
+# Zero-shot baseline (via proxy)
+python workflow/predict_final_answer.py \
+    --model_name proxy-qwen2.5-3b \
+    --d RoG-webqsp --split "test[:10]"
+
+# FNR analysis only
+python workflow/predict_symbolic_dca_trie.py \
+    --model_name gcr-qwen2.5-3b \
+    --d RoG-webqsp --split "test[:10]" \
+    --dca_mode v1 --n_data 100
+\end{lstlisting}
+
+\end{document}

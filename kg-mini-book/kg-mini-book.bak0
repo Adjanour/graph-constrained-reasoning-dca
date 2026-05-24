@@ -1,0 +1,646 @@
+% =============================================================================
+% Knowledge Graphs & Graph Theory: A Comprehensive Mini-Book
+% LaTeX Edition
+% =============================================================================
+\documentclass[11pt,a4paper,oneside,openany]{book}
+
+% --- Encoding and fonts ---
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[english]{babel}
+
+% --- Mathematics ---
+\usepackage{amsmath,amssymb,amsthm,amsfonts}
+\usepackage{mathtools}
+\usepackage{bbm}
+
+% --- Graphics ---
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,shapes.geometric,fit,backgrounds,calc,decorations.pathmorphing}
+
+% --- Tables ---
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{tabularx}
+
+% --- Code listings ---
+\usepackage{listings}
+\usepackage{xcolor}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    frame=single
+}
+\lstset{style=mystyle}
+
+% --- Hyperlinks ---
+\usepackage[hidelinks,colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+% --- Geometry ---
+\usepackage[top=2.5cm,bottom=2.5cm,left=3cm,right=3cm]{geometry}
+
+% --- Headers and footers ---
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhead[LE,RO]{\thepage}
+\fancyhead[RE]{\leftmark}
+\fancyhead[LO]{\rightmark}
+\fancyfoot{}
+
+% --- Section formatting ---
+\usepackage{titlesec}
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries}{\chaptertitlename\ \thechapter}{20pt}{\Huge}
+\titlespacing*{\chapter}{0pt}{-20pt}{40pt}
+
+% --- Theorem environments ---
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[chapter]
+\newtheorem{example}{Example}[chapter]
+\newtheorem{exercise}{Exercise}[chapter]
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[chapter]
+\newtheorem{lemma}{Lemma}[chapter]
+\newtheorem{proposition}{Proposition}[chapter]
+\newtheorem{corollary}{Corollary}[chapter]
+
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}[chapter]
+
+% --- Custom commands ---
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\V}{\mathbb{V}}
+\newcommand{\cE}{\mathcal{E}}
+\newcommand{\cR}{\mathcal{R}}
+\newcommand{\cT}{\mathcal{T}}
+\newcommand{\cV}{\mathcal{V}}
+\newcommand{\cG}{\mathcal{G}}
+\newcommand{\kg}{\mathcal{K}}
+\newcommand{\bone}{\mathbbm{1}}
+
+\newcommand{\textalg}[1]{\texttt{#1}}
+
+% --- Title page ---
+\title{\Huge Knowledge Graphs \& Graph Theory\\[10pt]
+       \Large A Comprehensive Mini-Book\\[20pt]
+       \large From Foundations to Frontiers}
+\author{Bernard}
+\date{\today}
+
+\begin{document}
+
+\frontmatter
+\maketitle
+
+\tableofcontents
+
+\chapter{Preface}
+
+Knowledge graphs (KGs) have emerged as a cornerstone of modern artificial intelligence, bridging the gap between raw data and machine-interpretable knowledge. From Google's search graph to Wikidata's community-curated knowledge base, from GraphRAG-powered chatbots to ontology-constrained large language model reasoning, KGs are everywhere --- yet their theoretical foundations and practical construction remain scattered across disparate fields: graph theory, database systems, natural language processing, semantic web, and machine learning.
+
+This mini-book aims to provide a self-contained, rigorous treatment of knowledge graphs and their mathematical underpinnings. It is designed for graduate students, researchers, and practitioners who want a thorough understanding of the field --- not just a surface-level tour.
+
+\paragraph*{What this book covers.}
+We begin with graph theory (Chapter~1), establishing the mathematical language used throughout. Chapter~2 defines knowledge graphs proper, contrasting them with relational databases and vector stores. Chapters~3 and~4 cover data models (RDF, property graphs) and ontologies (RDFS, OWL). Chapter~5 walks through the end-to-end KG construction pipeline. Querying --- SPARQL, Cypher, and the emerging GQL standard --- is treated in Chapter~6.
+
+The second half of the book turns to machine learning: knowledge graph embeddings (Chapter~7), graph neural networks (Chapter~8), and the integration of KGs with large language models via GraphRAG (Chapter~9). Chapter~10 focuses on knowledge graph question answering (KGQA), including constrained decoding approaches such as GCR and DCA-Trie. Production infrastructure and storage are covered in Chapter~11, and advanced topics --- temporal KGs, hyper-relational facts, inductive reasoning, neuro-symbolic AI, quality assurance --- in Chapter~12. We close with a structured learning roadmap (Chapter~13) and a comprehensive resource index (Chapter~14).
+
+\paragraph*{Prerequisites.}
+Readers should be comfortable with basic linear algebra, probability, and set theory. Familiarity with Python is helpful for the code examples. No prior knowledge of graph theory or knowledge graphs is assumed.
+
+\paragraph*{Notation.}
+We denote graphs as $G = (V, E)$, knowledge graphs as $\kg = (\cE, \cR, T)$ where $\cE$ is the entity set, $\cR$ the relation set, and $T \subseteq \cE \times \cR \times \cE$ the triple set. Vectors are bold lowercase ($\mathbf{h}$), matrices bold uppercase ($\mathbf{W}$), and sets in calligraphic ($\cE$).
+
+\vspace{20pt}
+\noindent\textit{Bernard}\\
+\textit{\today}
+
+\mainmatter
+
+% =============================================================================
+% Chapter 1: Graph Theory
+% =============================================================================
+\chapter{Graph Theory: The Foundation}\label{ch:graph-theory}
+
+\paragraph{Overview.}
+Graph theory provides the mathematical language for describing and analysing networked structures. Every knowledge graph is, at its core, a graph. Understanding graph-theoretic concepts --- from basic definitions to spectral theory --- is essential for designing, querying, and learning from KGs. This chapter develops the foundations rigorously but accessibly, with an eye toward KG applications.
+
+% ---------------------------------------------------------------------------
+\section{Basic Definitions}\label{sec:basic-defs}
+
+\begin{definition}[Graph]
+A \emph{graph} is an ordered pair $G = (V, E)$ where $V$ is a set of \emph{vertices} (also called \emph{nodes}) and $E$ is a set of \emph{edges}. Each edge is either:
+\begin{itemize}
+  \item An unordered pair $\{u, v\}$ with $u, v \in V$ (undirected graph), or
+  \item An ordered pair $(u, v)$ with $u, v \in V$ (directed graph).
+\end{itemize}
+\end{definition}
+
+\begin{definition}[Directed graph]
+A \emph{directed graph} (or \emph{digraph}) $G = (V, A)$ consists of a vertex set $V$ and an \emph{arc} set $A \subseteq V \times V$. Arcs $(u, v)$ have a direction from $u$ (the \emph{tail}) to $v$ (the \emph{head}).
+\end{definition}
+
+Knowledge graphs are almost always directed graphs, since relationships have inherent direction: \textsc{Elvis\_Presley} $\xrightarrow{\text{starred\_in}}$ \textsc{Blue\_Hawaii} is not the same as the reverse.
+
+\begin{definition}[Labeled graph]
+A \emph{labeled graph} is a graph equipped with a labeling function $\ell: V \cup E \to \Sigma$ mapping vertices and/or edges to symbols in an alphabet $\Sigma$. In KGs, edges carry relation-type labels and vertices may carry type labels.
+\end{definition}
+
+\begin{definition}[Subgraph]
+A graph $H = (V_H, E_H)$ is a \emph{subgraph} of $G = (V, E)$, denoted $H \subseteq G$, if $V_H \subseteq V$ and $E_H \subseteq E$. An \emph{induced subgraph} on $V' \subseteq V$ contains all edges of $G$ whose endpoints are both in $V'$.
+\end{definition}
+
+The induced subgraph is the natural notion of a ``query context'' in KG reasoning: given a set of entities of interest, we take all relations among them.
+
+\begin{definition}[Walk, path, cycle]
+A \emph{walk} of length $k$ in a graph $G$ is a sequence $v_0 e_1 v_1 e_2 \ldots e_k v_k$ where each $e_i$ connects $v_{i-1}$ and $v_i$. A \emph{path} is a walk with no repeated vertices. A \emph{cycle} is a walk of length $k \ge 3$ that starts and ends at the same vertex with no other repeated vertices.
+\end{definition}
+
+\begin{definition}[Tree]
+A \emph{tree} is a connected, acyclic undirected graph. A \emph{rooted tree} designates a special vertex as the root. Every tree with $n$ vertices has exactly $n-1$ edges. Trees are the natural structure for representing hierarchical knowledge (taxonomies, ontologies).
+\end{definition}
+
+\begin{definition}[Degree]
+The \emph{degree} $\deg(v)$ of a vertex $v$ is the number of edges incident to it. In a directed graph, the \emph{in-degree} $\deg^-(v)$ counts incoming arcs and \emph{out-degree} $\deg^+(v)$ counts outgoing arcs.
+\end{definition}
+
+\noindent\textbf{KG relevance:} The average out-degree of entities in a KG determines the branching factor for multi-hop traversal. Freebase has $\overline{\deg^+} \approx 20$, meaning a 3-hop BFS from a single entity can visit up to $20^3 = 8{,}000$ candidate paths.
+
+\begin{definition}[Graph isomorphism]
+Two graphs $G = (V, E)$ and $G' = (V', E')$ are \emph{isomorphic} if there exists a bijection $\phi: V \to V'$ such that $\{u, v\} \in E \iff \{\phi(u), \phi(v)\} \in E'$. The \emph{graph isomorphism problem} asks whether such a bijection exists; its complexity class is not known to be in P nor NP-complete.
+\end{definition}
+
+% ---------------------------------------------------------------------------
+\section{Graph Representations}\label{sec:graph-repr}
+
+Three standard computer representations for graphs, each with different trade-offs:
+
+\begin{table}[h]
+\centering
+\caption{Graph representation comparison}
+\label{tab:graph-repr}
+\begin{tabular}{lccc}
+\toprule
+Representation & Space & Edge query & Best for \\
+\midrule
+Adjacency matrix $A_{ij} = \bone_{(i,j) \in E}$ & $O(V^2)$ & $O(1)$ & Dense graphs, linear algebra \\
+Adjacency list (per-vertex neighbor list) & $O(V+E)$ & $O(\deg(v))$ & Sparse graphs (most KGs) \\
+Edge list $(u,v)$ pairs & $O(E)$ & $O(E)$ & Simple processing, file formats \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{definition}[Adjacency matrix]
+For a graph $G = (V, E)$ with $V = \{1, \dots, n\}$, the \emph{adjacency matrix} $A \in \{0,1\}^{n \times n}$ has entries $A_{ij} = 1$ if $(i,j) \in E$ and $0$ otherwise. For undirected graphs, $A$ is symmetric.
+\end{definition}
+
+KGs require a third-order extension: the \emph{adjacency tensor} $\mathcal{A} \in \{0,1\}^{|\cE| \times |\cR| \times |\cE|}$ where $\mathcal{A}_{ijk} = 1$ if triple $(e_i, r_k, e_j)$ exists.
+
+% ---------------------------------------------------------------------------
+\section{Graph Traversal}\label{sec:traversal}
+
+\begin{algorithm}[h]
+\caption{BFS for KG path enumeration}
+\label{alg:bfs-kg}
+\begin{lstlisting}[language=Python,frame=single,numbers=none]
+def bfs_paths(G, source, max_depth):
+    """Enumerate all paths from source up to max_depth."""
+    frontier = [(source, [source])]  # (entity, path_so_far)
+    all_paths = []
+    for depth in range(max_depth):
+        next_frontier = []
+        for entity, path in frontier:
+            for relation, neighbor in G.out_edges(entity):
+                if neighbor not in path:  # avoid cycles
+                    new_path = path + [(relation, neighbor)]
+                    next_frontier.append((neighbor, new_path))
+                    all_paths.append(new_path)
+        frontier = next_frontier
+    return all_paths
+\end{lstlisting}
+\end{algorithm}
+
+This algorithm is the computational core of graph-constrained decoding methods (GCR, DCA-Trie). Its time complexity is $O(\overline{d}^k)$ where $\overline{d}$ is the average out-degree and $k$ is the maximum path length.
+
+% ---------------------------------------------------------------------------
+\section{Spectral Graph Theory}\label{sec:spectral}
+
+\begin{definition}[Graph Laplacian]
+For an undirected graph $G = (V, E)$ with adjacency matrix $A$ and degree matrix $D = \operatorname{diag}(\deg(v_1), \dots, \deg(v_n))$, the \emph{graph Laplacian} is:
+$$L = D - A$$
+The \emph{normalized Laplacian} is $\mathcal{L} = I - D^{-1/2} A D^{-1/2}$.
+\end{definition}
+
+\begin{theorem}[Properties of $L$]
+\label{thm:laplacian}
+\begin{enumerate}
+  \item $L$ is symmetric and positive semidefinite.
+  \item The smallest eigenvalue of $L$ is $0$, with eigenvector $\bone = (1, \dots, 1)^\top$.
+  \item The multiplicity of eigenvalue $0$ equals the number of connected components of $G$.
+  \item For any vector $\mathbf{x} \in \R^n$, $\mathbf{x}^\top L \mathbf{x} = \sum_{(i,j) \in E} (x_i - x_j)^2$.
+\end{enumerate}
+\end{theorem}
+
+\noindent This last property makes the Laplacian central to graph signal processing and spectral clustering: it measures the ``smoothness'' of a function on the graph.
+
+\begin{proposition}[Spectral clustering]
+Given a graph $G$, the eigenvector corresponding to the second-smallest eigenvalue of $L$ (the \emph{Fiedler vector}) provides the optimal 2-way partition of $V$ under the normalized cut criterion.
+\end{proposition}
+
+Spectral methods are used in KG construction for entity resolution (clustering co-referent entities) and in GraphRAG for community detection.
+
+% ---------------------------------------------------------------------------
+\section{The Weisfeiler--Lehman Hierarchy}\label{sec:wl}
+
+The \emph{Weisfeiler--Lehman (WL) test} is a polynomial-time algorithm for graph isomorphism testing that forms the theoretical foundation for graph neural network expressivity.
+
+\begin{definition}[1-WL color refinement]
+Given a graph $G = (V, E)$ with initial colors $c^{(0)}(v)$, iterate:
+$$c^{(t+1)}(v) = \operatorname{hash}\!\left( c^{(t)}(v), \left\{\!\!\left\{ c^{(t)}(u) : u \in \mathcal{N}(v) \right\}\!\!\right\} \right)$$
+where the double braces denote a multiset. The algorithm halts when the color partition stabilizes.
+\end{definition}
+
+\begin{theorem}[GNN expressivity]
+\label{thm:wl-gnn}
+Message-passing GNNs are at most as powerful as the 1-WL test for distinguishing non-isomorphic graphs. To exceed 1-WL, a GNN must use higher-order message passing (k-WL) or structural features (e.g., random walks, distance encoding).
+\end{theorem}
+
+\noindent This result explains why simple GNNs fail on regular graphs and motivates architectures like GIN (Graph Isomorphism Network) that match 1-WL.
+
+% ---------------------------------------------------------------------------
+\section{Exercises}
+
+\begin{exercise}
+Prove that the sum of degrees in any undirected graph equals $2|E|$.
+\end{exercise}
+
+\begin{exercise}
+Show that the graph Laplacian $L = D - A$ is positive semidefinite.
+\end{exercise}
+
+\begin{exercise}
+Given a KG with average out-degree $\overline{d}$, derive the expected number of paths of length $k$ reachable from a source entity. How does this grow with $k$?
+\end{exercise}
+
+\begin{exercise}
+Implement the BFS path enumeration algorithm on a toy KG with 10 entities and 3 relation types. Count the number of paths at each depth.
+\end{exercise}
+
+\begin{exercise}
+Prove that 1-WL cannot distinguish two non-isomorphic regular graphs of the same degree and size.
+\end{exercise}
+
+% =============================================================================
+% Chapter 2: What Is a Knowledge Graph?
+% =============================================================================
+\chapter{What Is a Knowledge Graph?}\label{ch:what-is-kg}
+
+\paragraph{Overview.}
+Despite widespread use, ``knowledge graph'' resists a single precise definition. This chapter surveys existing definitions, establishes a working definition for this book, and contrasts KGs with related data management paradigms.
+
+% ---------------------------------------------------------------------------
+\section{Toward a Definition}\label{sec:kg-def}
+
+The term \emph{knowledge graph} was popularised by Google in 2012, but the underlying ideas date back decades to semantic networks (Quillian, 1968), description logics, and early expert systems. A synthesis of existing definitions yields:
+
+\begin{definition}[Knowledge Graph]
+A \emph{knowledge graph} $\kg = (\cE, \cR, T, \Sigma)$ consists of:
+\begin{enumerate}
+  \item An entity set $\cE$ (nodes).
+  \item A relation set $\cR$ (edge types).
+  \item A triple set $T \subseteq \cE \times \cR \times \cE$ (facts), where each triple $(h, r, t) \in T$ states that relation $r$ holds between head $h$ and tail $t$.
+  \item A schema $\Sigma$ (optional) defining constraints on entities and relations --- e.g., domain/range restrictions, class hierarchies, cardinality constraints.
+\end{enumerate}
+\end{definition}
+
+\begin{remark}
+This definition encompasses both \emph{schema-free} KGs (Wikidata-like, where anyone can add any triple) and \emph{schema-enforced} KGs (enterprise KGs with OWL ontologies). The difference matters for reasoning and quality assurance.
+\end{remark}
+
+\begin{example}[A KG triple]
+\label{ex:triple}
+The fact ``Elvis Presley starred in the 1961 movie Blue Hawaii'' decomposes into:
+\begin{align*}
+h &= \text{Elvis\_Presley} \in \cE, \\
+r &= \text{starred\_in} \in \cR, \\
+t &= \text{Blue\_Hawaii} \in \cE.
+\end{align*}
+Additionally, a separate triple states the movie's release year:
+$$(\text{Blue\_Hawaii}, \text{release\_year}, \text{``1961''})$$
+where the object is a \emph{literal} rather than an entity.
+\end{example}
+
+% ---------------------------------------------------------------------------
+\section{Ehrenberg's Four Characteristics}
+
+The seminal survey by Ehr\-en\-berg et al.~(2024) distills four defining characteristics of KGs:
+
+\begin{enumerate}
+  \item[\textbf{(1)}] \textbf{Structured in graph form.} Data is explicitly represented as nodes and edges, not as flattened tables or unstructured text.
+  \item[\textbf{(2)}] \textbf{Normalized into triples.} Each atomic fact is a subject-predicate-object triple, enabling fine-grained querying and reasoning.
+  \item[\textbf{(3)}] \textbf{Connected via meaningful relationships.} Edges carry semantic types (not just ``link''), enabling multi-hop traversal over interpretable paths.
+  \item[\textbf{(4)}] \textbf{Schematic and extensible.} The schema can evolve --- new relation types, entity types, and constraints can be added without rewriting existing data.
+\end{enumerate}
+
+% ---------------------------------------------------------------------------
+\section{KG vs.\ Relational Database}\label{sec:kg-vs-rdb}
+
+A common question: why not just use a relational database? The answer lies in how each handles multi-hop queries and schema evolution.
+
+\begin{table}[h]
+\centering
+\caption{Knowledge graphs vs.\ relational databases}
+\label{tab:kg-vs-rdb}
+\begin{tabular}{lp{5cm}p{6cm}}
+\toprule
+Dimension & Knowledge Graph & Relational Database \\
+\midrule
+Relationships & First-class citizen, directly traversable & Foreign key joins \\
+Multi-hop query & $O(d^k)$ native traversal & $k$ JOINs, exponential optimizer cost \\
+Schema & Flexible, can evolve on the fly & Rigid, requires ALTER TABLE migrations \\
+Semantic reasoning & Supports inference (OWL, rules) & Exact matching only \\
+Extensibility & Add new edge types without migration & New tables/columns needed \\
+Completeness & Open-world: missing $\neq$ false & Closed-world: NULL = unknown \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{example}[Multi-hop query]
+\label{ex:multihop}
+\emph{Query:} ``Find all directors of movies featuring Elvis Presley.''
+
+In a KG, this is a 2-hop traversal:
+$$\text{Elvis} \xrightarrow{\text{starred\_in}} \text{Movie} \xrightarrow{\text{directed\_by}} \text{Director}$$
+
+In SQL, this requires two JOINs across at least three tables (casting, movies, directors). The query planner may choose a suboptimal join order, leading to exponential worst-case complexity.
+\end{example}
+
+% ---------------------------------------------------------------------------
+\section{KG vs.\ Vector Database}\label{sec:kg-vs-vector}
+
+With the rise of embeddings and RAG, vector databases have become popular for semantic search. They are complementary to, not replacements for, KGs.
+
+\begin{table}[h]
+\centering
+\caption{Knowledge graphs vs.\ vector databases}
+\label{tab:kg-vs-vector}
+\begin{tabular}{lp{6cm}p{6cm}}
+\toprule
+Query & Vector DB & Knowledge Graph \\
+\midrule
+``Find companies funded by Sequoia'' & Returns chunks \emph{mentioning} Sequoia + funding & Returns exact entities via \textsc{FUNDED\_BY} edge \\
+``Shared integrations between two products'' & Multiple queries + manual intersection & Single Cypher/SPARQL path query \\
+Completeness guarantee & ``Most relevant'' chunks (may miss) & All matching edges (if in graph) \\
+Explainability & Black-box similarity score & Explicit traversal path \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{remark}
+The strongest systems combine both: vector search for entity linking and initial retrieval, then KG traversal for structured multi-hop reasoning. This is the principle behind GraphRAG (Chapter~\ref{ch:graphrag}).
+\end{remark}
+
+% ---------------------------------------------------------------------------
+\section{Major Knowledge Graphs}\label{sec:major-kgs}
+
+\begin{longtable}{lccc}
+\caption{Major knowledge graphs compared}
+\label{tab:major-kgs} \\
+\toprule
+KG & Scale & Domain & Access \\
+\midrule
+\endfirsthead
+\caption[]{Major knowledge graphs compared (continued)} \\
+\toprule
+KG & Scale & Domain & Access \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Wikidata & $\sim$100M entities, 1.5B statements & General & SPARQL, dump \\
+Freebase (deprecated) & $\sim$50M entities & General & Migrated to Wikidata \\
+DBpedia & $\sim$40M entities & Wikipedia-derived & SPARQL, dump \\
+YAGO & $\sim$10M entities, 120M facts & General & Download \\
+Google KG & $\sim$7B entities & General & API (limited) \\
+NELL & $\sim$3M beliefs & Web-derived & Download \\
+ConceptNet & $\sim$8M nodes & Commonsense & API, download \\
+WordNet & $\sim$155K words & Linguistic & Download \\
+\hline
+\multicolumn{4}{l}{\small\textit{Note:} Scales are approximate as of 2025--2026. Wikidata grows continuously.}
+\end{longtable}
+
+% ---------------------------------------------------------------------------
+\section{Exercises}
+
+\begin{exercise}
+Consider the sentence ``The CEO of OpenAI, Sam Altman, testified before Congress in 2023.'' Decompose it into KG triples. Identify which elements are entities and which are literals.
+\end{exercise}
+
+\begin{exercise}
+Given a relational schema with tables: \texttt{Actors(id, name)}, \texttt{Movies(id, title, year)}, \texttt{Casting(actor\_id, movie\_id, role)}. Write SQL for the 2-hop query from Example~\ref{ex:multihop}. Count the number of JOINs required.
+\end{exercise}
+
+\begin{exercise}
+Explain why KGs operate under the Open World Assumption and why this matters for query answering. Provide a concrete example where OWA yields different behaviour than CWA.
+\end{exercise}
+
+% =============================================================================
+% Chapter 3: Data Models
+% =============================================================================
+\chapter{Data Models: RDF vs.\ Labeled Property Graphs}\label{ch:datamodels}
+
+\paragraph{Overview.}
+Two dominant data models govern how knowledge graphs are stored and queried: the Resource Description Framework (RDF, a W3C standard) and the Labeled Property Graph (LPG, dominant in industry). Choosing between them depends on whether you prioritise interoperability and reasoning (RDF) or performance and edge properties (LPG). This chapter explains both in depth, contrasts their trade-offs, and introduces the emerging GQL standard.
+
+% ---------------------------------------------------------------------------
+\section{RDF: The Resource Description Framework}\label{sec:rdf}
+
+RDF is the W3C-recommended framework for representing graph data on the web. Every fact is a \emph{triple} $\langle s, p, o \rangle$ where the subject $s$ and predicate $p$ are Internationalized Resource Identifiers (IRIs), and the object $o$ is either an IRI or a literal.
+
+\begin{definition}[RDF triple]
+An \emph{RDF triple} is a statement $\langle s, p, o \rangle$ where:
+\begin{itemize}
+  \item $s$ (subject) is an IRI or blank node.
+  \item $p$ (predicate) is an IRI.
+  \item $o$ (object) is an IRI, blank node, or literal.
+\end{itemize}
+The set of all triples forms an RDF graph.
+\end{definition}
+
+\begin{example}[RDF triple in Turtle syntax]
+\label{ex:rdf-turtle}
+\begin{lstlisting}[language=XML,numbers=none]
+@prefix ex: <http://example.org/> .
+ex:Elvis_Presley ex:starred_in ex:Blue_Hawaii .
+ex:Blue_Hawaii rdf:type ex:Movie .
+ex:Elvis_Presley rdf:type ex:Person .
+ex:Blue_Hawaii ex:release_year "1961"^^xsd:integer .
+\end{lstlisting}
+\end{example}
+
+\subsection{RDF Serialization Formats}
+
+\begin{description}
+  \item[Turtle (.ttl)] Compact, human-readable; the most common format for authoring RDF.
+  \item[RDF/XML] The original W3C standard; verbose but widely supported.
+  \item[JSON-LD] JSON-based, popular in web APIs; supports context documents for compactness.
+  \item[N-Triples (.nt)] One triple per line, no abbreviations; ideal for streaming and large dumps.
+  \item[TriG] Extends Turtle to support multiple named graphs in one file.
+\end{description}
+
+\subsection{RDF-star (RDF*)}
+
+Standard RDF cannot natively make statements \emph{about} statements. RDF-star extends the data model with \emph{reified triples as subjects}:
+
+\begin{lstlisting}[language=XML,numbers=none]
+<< ex:Elvis_Presley ex:starred_in ex:Blue_Hawaii >>
+    ex:accordingTo ex:IMDb ;
+    ex:confidence "0.95"^^xsd:decimal .
+\end{lstlisting}
+
+This is critical for: provenance tracking (who said this fact?), confidence scoring (how sure are we?), temporal annotations (when was this true?), and source attribution.
+
+\begin{definition}[RDF-star]
+An \emph{RDF-star triple} allows a triple $\langle s', p', o' \rangle$ itself to appear as the subject or object of another triple. This enables concise reification without the standard quadruple-blowup pattern.
+\end{definition}
+
+% ---------------------------------------------------------------------------
+\section{Labeled Property Graphs}\label{sec:lpg}
+
+The \emph{Labeled Property Graph (LPG)} model, popularised by Neo4j, enriches nodes and edges with key-value properties and type labels.
+
+\begin{definition}[Property graph]
+A \emph{property graph} is a directed, labeled, attributed multigraph $G = (V, E, \ell, P)$ where:
+\begin{itemize}
+  \item $V$ is a set of vertices.
+  \item $E \subseteq V \times V$ is a set of directed edges.
+  \item $\ell: V \cup E \to 2^{\Sigma}$ assigns one or more labels to each vertex and edge.
+  \item $P: (V \cup E) \times \mathcal{K} \to \mathcal{V}$ assigns property key-value pairs.
+\end{itemize}
+\end{definition}
+
+\begin{example}[Property graph representation]
+\label{ex:lpg}
+Node: \texttt{Elvis\_Presley}
+\begin{itemize}
+  \item Labels: {Person, Musician}
+  \item Properties: \{name: ``Elvis Presley'', birth\_date: ``1935-01-08''\}
+\end{itemize}
+Node: \texttt{Blue\_Hawaii}
+\begin{itemize}
+  \item Labels: {Movie}
+  \item Properties: \{title: ``Blue Hawaii'', release\_year: 1961\}
+\end{itemize}
+Edge: \texttt{Elvis\_Presley -[:STARRED\_IN]-> Blue\_Hawaii}
+\begin{itemize}
+  \item Properties: \{role: ``Chad Gates''\}
+\end{itemize}
+\end{example}
+
+\subsection{Key Advantages of LPG over RDF}
+
+\begin{enumerate}
+  \item \textbf{Properties on edges:} In RDF, adding a property to a relationship (e.g., ``role in a film'') requires reification (creating a new node for the statement). In LPG, edge properties are native.
+  \item \textbf{No global IRI requirement:} Nodes can use local identifiers, making LPGs simpler for self-contained applications.
+  \item \textbf{Faster traversal:} Native graph storage optimises pointer-chasing, while RDF triple stores often use relational backends.
+\end{enumerate}
+
+% ---------------------------------------------------------------------------
+\section{Detailed Comparison}\label{sec:rdf-vs-lpg}
+
+\begin{table}[h]
+\centering
+\caption{RDF vs.\ LPG: comprehensive comparison}
+\label{tab:rdf-vs-lpg}
+\begin{tabular}{lp{5.5cm}p{5.5cm}}
+\toprule
+Criterion & RDF & LPG \\
+\midrule
+Standardisation & W3C standard (2004, 2014) & De facto (Cypher), GQL standard (2024) \\
+Properties on edges & Reification or RDF-star needed & Native \\
+Schema/ontology & RDFS, OWL (built-in semantics) & Application-level \\
+Reasoning & Built-in RDFS/OWL reasoning & Manual implementation \\
+Query language & SPARQL (W3C standard) & Cypher, Gremlin, GQL \\
+Interoperability & Excellent (Linked Data) & Limited \\
+Multi-hop traversal & Triple store dependent & Fast (native graph) \\
+Industry adoption & Academic, data integration & Enterprise, OLTP \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ---------------------------------------------------------------------------
+\section{Query Languages Compared}\label{sec:query-compare}
+
+\begin{table}[h]
+\centering
+\caption{SPARQL vs.\ Cypher: query patterns side by side}
+\label{tab:sparql-cypher}
+\begin{tabular}{lp{6cm}p{6cm}}
+\toprule
+Task & SPARQL (RDF) & Cypher (Neo4j) \\
+\midrule
+Single-hop retrieve & \texttt{SELECT ?m WHERE \{ ex:E ex:starred\_in ?m \}} & \texttt{MATCH (:Person\{n:'E'\})-[:STARRED\_IN]->(m) RETURN m} \\
+Two-hop path & \texttt{SELECT ?x WHERE \{ ex:E ex:starred\_in / ex:directed\_by ?x \}} & \texttt{MATCH (:Person\{n:'E'\})-[:STARRED\_IN]->()-[:DIRECTED\_BY]->(d) RETURN d} \\
+Property filter & \texttt{FILTER(?year > 1960)} & \texttt{WHERE m.release\_year > 1960} \\
+Variable-length & \texttt{ex:E (ex:r1|ex:r2)\{1,3\} ?x} & \texttt{MATCH (p)-[:R1|R2*1..3]->(x)} \\
+Shortest path & Not natively supported & \texttt{shortestPath( (p1)-[*]-(p2) )} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ---------------------------------------------------------------------------
+\section{GQL: The New ISO Standard}\label{sec:gql}
+
+GQL (ISO~39075:2024) is the first international standard for property graph querying, unifying concepts from Cypher, PGQL, and SQL/XML. It supports:
+
+\begin{itemize}
+  \item \textbf{Graph patterns:} ASCII-art style path matching (similar to Cypher).
+  \item \textbf{Composable queries:} Subqueries, recursion, aggregation.
+  \item \textbf{Property graph schema:} Labels, properties, and constraints.
+  \item \textbf{Interoperability:} Standardised interaction between graph and relational systems.
+\end{itemize}
+
+Major vendors (Neo4j, Oracle, Amazon Neptune) are adopting GQL alongside existing query languages. GQL is expected to gradually become the lingua franca of property graph querying.
+
+% ---------------------------------------------------------------------------
+\section{Exercises}
+
+\begin{exercise}
+Take the triple ``Barack Obama was born in Honolulu, Hawaii on August 4, 1961.'' Express it in (a) Turtle RDF, (b) JSON-LD, and (c) a property graph representation. Identify which aspects of the fact are easier to express in each representation.
+\end{exercise}
+
+\begin{exercise}
+Explain why RDF-star was necessary. Construct an example of a provenance-aware triple and compare the RDF-star version with the standard reification version (which requires a blank node and 3--4 triples).
+\end{exercise}
+
+\begin{exercise}
+Write a SPARQL query that retrieves all actors who starred in movies directed by directors born after 1950. Then write the equivalent Cypher query. Compare the syntax.
+\end{exercise}
