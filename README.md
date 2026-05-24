@@ -124,6 +124,18 @@ python workflow/predict_final_answer.py \
 ![](resources/cases.png)
 
 ## Bibinfo
+## Three DCA-Trie Approach Variants
+
+This repository tracks three generations of the DCA-Trie constraint oracle design:
+
+| Directory | Approach | Key Idea |
+|-----------|----------|----------|
+| `approach1_cosine/` | Cosine similarity (v0) | `cos(E(path), E(question)) ≥ τ` — monolithic score |
+| `approach2_decomposed/` | Decomposed product (v1) | `ρ_r · ρ_e · ρ_traj` — three components, one encoder |
+| `approach3_symbolic/` | Symbolic TypeOracle (v2) | type gate + range gate — no encoder, no threshold |
+
+Each folder contains its own set of Colab notebooks (v1, v2, SIR) and a standalone algorithm demo.
+
 If you found this repo helpful, please help us by citing this paper:
 ```
 @inproceedings{luo2024graph,
