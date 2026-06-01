@@ -1,0 +1,180 @@
+\chapter{Regression}
+\label{ch:regression}
+
+\epigraph{``All of machine learning is either regression or classification. Everything else is a trick.''}{}
+
+\learninggoal{
+	\item Derive and interpret linear regression via ordinary least squares.
+	\item Understand the assumptions underlying linear regression and how violations affect inference.
+	\item Extend linear regression with basis functions for non-linear relationships.
+	\item Diagnose model fit using residual analysis and influence measures.
+}
+
+\section{Linear Regression}
+
+The workhorse of supervised learning: model the target as a linear combination of features.
+
+\[
+	y = \mathbf{w}^\top \mathbf{x} + \epsilon, \quad \epsilon \sim \N(0, \sigma^2)
+\]
+
+Given data $\{(\mathbf{x}_i, y_i)\}_{i=1}^n$, collect inputs into matrix $\mathbf{X} \in \R^{n \times d}$ and outputs into vector $\mathbf{y} \in \R^n$:
+
+\[
+	\mathbf{X} = \begin{pmatrix}
+		\mathbf{x}_1^\top \\
+		\vdots            \\
+		\mathbf{x}_n^\top
+	\end{pmatrix}, \quad
+	\mathbf{y} = \begin{pmatrix} y_1 \\ \vdots \\ y_n \end{pmatrix}
+\]
+
+\subsection{Ordinary Least Squares}
+
+The OLS estimator minimizes the sum of squared residuals:
+
+\[
+	\hat{\mathbf{w}}_{\text{OLS}} = \arg\min_{\mathbf{w}} \|\mathbf{X}\mathbf{w} - \mathbf{y}\|_2^2
+\]
+
+Setting the gradient to zero gives the \emph{normal equations}:
+
+\[
+	\mathbf{X}^\top \mathbf{X} \mathbf{w} = \mathbf{X}^\top \mathbf{y}
+\]
+\[
+	\hat{\mathbf{w}}_{\text{OLS}} = (\mathbf{X}^\top \mathbf{X})^{-1} \mathbf{X}^\top \mathbf{y}
+\]
+
+\begin{definition}[Fitted Values and Residuals]
+	\textbf{Fitted values:} $\hat{\mathbf{y}} = \mathbf{X} \hat{\mathbf{w}} = \mathbf{H} \mathbf{y}$, where $\mathbf{H} = \mathbf{X}(\mathbf{X}^\top \mathbf{X})^{-1} \mathbf{X}^\top$ is the \textbf{hat matrix}.\\
+	\textbf{Residuals:} $\mathbf{e} = \mathbf{y} - \hat{\mathbf{y}}$.
+\end{definition}
+
+\subsection{Geometric Interpretation}
+
+OLS projects $\mathbf{y}$ onto the column space of $\mathbf{X}$. The hat matrix $\mathbf{H}$ is the projection matrix. The residuals $\mathbf{e}$ are orthogonal to $\text{col}(\mathbf{X})$:
+
+\[
+	\mathbf{X}^\top \mathbf{e} = \mathbf{0}
+\]
+
+\section{Assumptions and Diagnostics}
+
+Linear regression makes four key assumptions:
+
+\begin{longtable}{p{2.5cm}p{5cm}p{5cm}}
+	\toprule
+	\textbf{Assumption} & \textbf{Meaning}                                       & \textbf{Diagnostic}        \\
+	\midrule
+	Linearity           & $\E[y \mid \mathbf{x}]$ is linear in $\mathbf{x}$      & Residuals vs.\ fitted plot \\
+	Independence        & Observations are independent                           & Durbin--Watson test        \\
+	Homoscedasticity    & $\Var(\epsilon \mid \mathbf{x}) = \sigma^2$ (constant) & Scale--location plot       \\
+	Normality           & $\epsilon \sim \N(0, \sigma^2)$                        & Q--Q plot of residuals     \\
+	\bottomrule
+\end{longtable}
+
+\subsection{Influential Points}
+
+A point is \emph{influential} if removing it substantially changes $\hat{\mathbf{w}}$. Measure with Cook's distance:
+
+\[
+	D_i = \frac{e_i^2}{d \cdot \text{MSE}} \cdot \frac{h_{ii}}{(1 - h_{ii})^2}
+\]
+
+where $h_{ii}$ is the $i$-th diagonal of $\mathbf{H}$ (the \emph{leverage}). A common threshold: $D_i > 4/n$ warrants investigation.
+
+\section{Basis Function Expansion}
+
+Linear regression is limited to linear relationships---but only the \emph{parameters} must be linear. The features can be non-linear transformations:
+
+\[
+	y = w_0 + w_1 \phi_1(x) + w_2 \phi_2(x) + \cdots + w_k \phi_k(x) + \epsilon
+\]
+
+\subsection{Polynomial Basis}
+
+\[
+	\phi_j(x) = x^j
+\]
+
+\begin{lstlisting}[language=Python, caption=Polynomial regression]
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
+
+poly = PolynomialFeatures(degree=3)
+X_poly = poly.fit_transform(X)
+model = LinearRegression().fit(X_poly, y)
+\end{lstlisting}
+
+Choosing the polynomial degree is a bias--variance tradeoff. Low degrees underfit; high degrees overfit.
+
+\subsection{Spline Basis}
+
+Splines are piecewise polynomials joined at \emph{knots}. Cubic splines are the most common: each piece is a cubic polynomial, with continuity constraints at knots.
+
+\[
+	y = \beta_0 + \beta_1 x + \beta_2 x^2 + \beta_3 x^3 + \sum_{k=1}^K \theta_k (x - \xi_k)_+^3 + \epsilon
+\]
+
+where $(z)_+ = \max(0, z)$ and $\xi_k$ are the knot locations. Splines are more stable than high-degree polynomials.
+
+\subsection{Regression Splines vs. Smoothing Splines}
+
+\begin{itemize}
+	\item \textbf{Regression splines:} choose knot locations and basis functions, then fit by OLS.
+	\item \textbf{Smoothing splines:} place a knot at every data point and add a penalty on the second derivative to prevent overfitting.
+\end{itemize}
+
+\section{Model Selection in Regression}
+
+\subsection{Adjusted $R^2$}
+
+\[
+	R^2_{\text{adj}} = 1 - \frac{\text{RSS} / (n - d - 1)}{\text{TSS} / (n - 1)}
+\]
+
+Penalizes adding useless features, unlike plain $R^2$.
+
+\subsection{Information Criteria}
+
+\begin{itemize}
+	\item \textbf{AIC:} $-2 \log L + 2d$
+	\item \textbf{BIC:} $-2 \log L + d \log n$
+\end{itemize}
+
+Both balance fit (log-likelihood) against model complexity. BIC penalizes complexity more heavily (useful for selecting the true model when it exists). AIC is better for prediction.
+
+\section{Multiple Regression and Interaction Effects}
+
+When features interact, their joint effect is not the sum of individual effects:
+
+\[
+	y = w_0 + w_1 x_1 + w_2 x_2 + w_{12} x_1 x_2 + \epsilon
+\]
+
+The interaction term $x_1 x_2$ allows the effect of $x_1$ to depend on $x_2$:
+
+\[
+	\frac{\partial y}{\partial x_1} = w_1 + w_{12} x_2
+\]
+
+Including all pairwise interactions adds $d(d-1)/2$ terms. Feature engineering often involves discovering important interactions.
+
+\section{Exercises}
+
+\begin{exercise}
+	Derive the normal equations by setting the gradient of $\|\mathbf{X}\mathbf{w} - \mathbf{y}\|_2^2$ to zero. Show each step.
+\end{exercise}
+
+\begin{exercise}
+	A dataset has 3 features and 100 observations. You fit a linear regression and obtain $R^2 = 0.85$ and $R^2_{\text{adj}} = 0.84$. You add 10 random noise features and refit. What do you expect to happen to $R^2$ and $R^2_{\text{adj}}$?
+\end{exercise}
+
+\begin{exercise}
+	Generate data from $y = \sin(x) + \epsilon$ with $x \in [0, 2\pi]$. Fit polynomials of degree 1, 3, 5, 15. Plot the fitted curves and report the test MSE on a held-out set. At what degree does overfitting begin?
+\end{exercise}
+
+\begin{exercise}
+	Explain why using a high-degree polynomial can produce wild extrapolations beyond the data range, while cubic splines are better behaved. What property of polynomials causes this?
+\end{exercise}

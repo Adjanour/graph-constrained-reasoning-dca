@@ -1,0 +1,193 @@
+\chapter{Classification}
+\label{ch:classification}
+
+\epigraph{``Classification is not regression with a different loss. Classification is a fundamentally different problem with different evaluation metrics and failure modes.''}{}
+
+\learninggoal{
+	\item Distinguish between logistic regression, LDA, decision trees, and KNN for classification.
+	\item Understand the probabilistic interpretation of logistic regression.
+	\item Evaluate classifiers using appropriate metrics: accuracy, precision--recall, ROC--AUC.
+	\item Handle class imbalance through resampling and cost-sensitive learning.
+}
+
+\section{Logistic Regression}
+
+Despite its name, logistic regression is a classification method. It models the probability of class membership:
+
+\[
+	p(y = 1 \mid \mathbf{x}) = \sigma(\mathbf{w}^\top \mathbf{x}) = \frac{1}{1 + e^{-\mathbf{w}^\top \mathbf{x}}}
+\]
+
+\begin{definition}[Logistic (Sigmoid) Function]
+	\[
+		\sigma(z) = \frac{1}{1 + e^{-z}}
+	\]
+	Maps $\R \to (0, 1)$ and is monotonic, with $\sigma(0) = 0.5$.
+\end{definition}
+
+The decision boundary $\mathbf{w}^\top \mathbf{x} = 0$ is linear in feature space. Points with $\mathbf{w}^\top \mathbf{x} > 0$ are classified as class 1; otherwise class 0.
+
+\subsection{Loss Function}
+
+Logistic regression minimizes the \emph{binary cross-entropy} (also called log loss):
+
+\[
+	L(\mathbf{w}) = -\frac{1}{n} \sum_{i=1}^n \big[ y_i \log \hat{y}_i + (1 - y_i) \log (1 - \hat{y}_i) \big]
+\]
+
+This is the negative log-likelihood under a Bernoulli model. Unlike squared error for classification, cross-entropy heavily penalizes confident wrong predictions.
+
+\subsection{Gradient and Optimization}
+
+The gradient of the cross-entropy loss:
+
+\[
+	\nabla L(\mathbf{w}) = \frac{1}{n} \sum_{i=1}^n (\sigma(\mathbf{w}^\top \mathbf{x}_i) - y_i) \mathbf{x}_i
+\]
+
+This has the same form as the OLS gradient but with $\hat{y}_i$ transformed through the sigmoid. There is no closed-form solution; we use gradient descent or Newton's method.
+
+\section{Linear Discriminant Analysis}
+
+LDA takes a different approach: model the class-conditional distributions $p(\mathbf{x} \mid y = k)$ as Gaussians with a shared covariance matrix.
+
+\[
+	p(\mathbf{x} \mid y = k) = \N(\boldsymbol{\mu}_k, \boldsymbol{\Sigma})
+\]
+
+Using Bayes' rule:
+
+\[
+	p(y = k \mid \mathbf{x}) \propto p(\mathbf{x} \mid y = k) \, p(y = k)
+\]
+
+The decision boundary between classes $k$ and $\ell$ is linear in $\mathbf{x}$:
+
+\[
+	\boldsymbol{\mu}_k^\top \boldsymbol{\Sigma}^{-1} \mathbf{x} - \frac12 \boldsymbol{\mu}_k^\top \boldsymbol{\Sigma}^{-1} \boldsymbol{\mu}_k + \log \pi_k = \boldsymbol{\mu}_\ell^\top \boldsymbol{\Sigma}^{-1} \mathbf{x} - \frac12 \boldsymbol{\mu}_\ell^\top \boldsymbol{\Sigma}^{-1} \boldsymbol{\mu}_\ell + \log \pi_\ell
+\]
+
+where $\pi_k = p(y = k)$.
+
+When the covariance matrices are allowed to differ per class (each class has its own $\boldsymbol{\Sigma}_k$), the decision boundaries become quadratic (QDA).
+
+\section{Decision Trees}
+
+Decision trees partition the feature space with axis-aligned splits.
+
+\begin{lstlisting}[language=Python, caption=Training a decision tree]
+from sklearn.tree import DecisionTreeClassifier
+
+model = DecisionTreeClassifier(max_depth=3,
+                               min_samples_split=10)
+model.fit(X, y)
+\end{lstlisting}
+
+\subsection{Split Criteria}
+
+At each node, the algorithm chooses the feature and threshold that maximize the information gain:
+
+\begin{itemize}
+	\item \textbf{Gini impurity:} $G = \sum_{k=1}^K p_k (1 - p_k)$
+	\item \textbf{Entropy:} $H = -\sum_{k=1}^K p_k \log p_k$
+	\item \textbf{Misclassification rate:} $E = 1 - \max_k p_k$
+\end{itemize}
+
+The Gini impurity and entropy are preferred because they are differentiable and more sensitive to changes in node purity.
+
+\subsection{Strengths and Weaknesses}
+
+Trees are:
+\begin{itemize}
+	\item Interpretable (if shallow).
+	\item Non-parametric (no distributional assumptions).
+	\item Handle non-linear relationships and interactions automatically.
+\end{itemize}
+
+But they:
+\begin{itemize}
+	\item Have high variance (a small change in data can change the tree).
+	\item Are prone to overfitting without pruning.
+	\item Create piecewise constant predictions (not smooth).
+\end{itemize}
+
+\section{K-Nearest Neighbors}
+
+KNN is a non-parametric method that memorizes the training data:
+
+\[
+	\hat{y}(\mathbf{x}) = \text{majority vote of the } k \text{ nearest neighbors}
+\]
+
+\begin{definition}[KNN]
+	\textbf{K-nearest neighbors} classifies a point based on the most common class among its $k$ closest training points, where distance is typically Euclidean.
+\end{definition}
+
+KNN has no training step (it is a \emph{lazy learner}). The key hyperparameter is $k$:
+
+\begin{itemize}
+	\item $k = 1$: zero training error, highly overfitted.
+	\item $k = n$: always predicts the majority class.
+	\item Optimal $k$ balances bias and variance, typically $\sqrt{n}$ as a rule of thumb.
+\end{itemize}
+
+\section{Multiclass Classification}
+
+Most binary classifiers extend to $K > 2$ classes:
+
+\begin{itemize}
+	\item \textbf{One-vs-Rest (OvR):} train $K$ binary classifiers, each distinguishing one class from the rest. Predict the class with the highest confidence.
+	\item \textbf{Softmax regression (multinomial logistic regression):} directly models $p(y = k \mid \mathbf{x}) = \frac{e^{\mathbf{w}_k^\top \mathbf{x}}}{\sum_{j=1}^K e^{\mathbf{w}_j^\top \mathbf{x}}}$.
+\end{itemize}
+
+\section{Evaluation Metrics}
+
+Accuracy is insufficient for most real-world problems.
+
+\begin{longtable}{p{3cm}p{5cm}p{4cm}}
+	\toprule
+	\textbf{Metric} & \textbf{Definition}                                      & \textbf{When to use}       \\
+	\midrule
+	Accuracy        & $\frac{TP + TN}{TP + TN + FP + FN}$                      & Balanced classes           \\
+	Precision       & $\frac{TP}{TP + FP}$                                     & Minimize false positives   \\
+	Recall          & $\frac{TP}{TP + FN}$                                     & Minimize false negatives   \\
+	$F_1$           & $2 \cdot \frac{P \cdot R}{P + R}$                        & Balanced precision--recall \\
+	ROC--AUC        & Area under ROC curve                                     & General discrimination     \\
+	Log loss        & $-\frac1n \sum [y \log \hat{y} + (1-y) \log(1-\hat{y})]$ & Probabilistic calibration  \\
+	\bottomrule
+\end{longtable}
+
+\section{Class Imbalance}
+
+When one class dominates (e.g., 99\% vs. 1\%), accuracy is misleading. A naive classifier predicting the majority class achieves 99\% accuracy.
+
+Strategies for imbalanced data:
+
+\begin{enumerate}
+	\item \textbf{Resampling:} oversample the minority class (SMOTE creates synthetic examples) or undersample the majority.
+	\item \textbf{Cost-sensitive learning:} weight the loss function inversely to class frequency.
+	\item \textbf{Threshold tuning:} adjust the decision threshold from 0.5 to a value that balances precision and recall.
+	\item \textbf{Anomaly detection:} treat the minority class as anomalies and use one-class methods.
+\end{enumerate}
+
+\begin{principle}[Prevalence and Prior Probability]
+	The model's predicted probabilities should be calibrated to reflect the true class prevalence. Platt scaling and isotonic regression adjust probabilities post-hoc.
+\end{principle}
+
+\section{Exercises}
+
+\begin{exercise}
+	Train a logistic regression classifier on a synthetic 2D dataset with two classes. Plot the decision boundary and the predicted probabilities as a contour plot. How does the boundary change with L2 regularization strength?
+\end{exercise}
+
+\begin{exercise}
+	You have a dataset with 95\% negative class and 5\% positive class. A classifier achieves 94\% accuracy. Is this good? Compute precision, recall, and $F_1$ if the confusion matrix is: $TP = 300$, $FN = 200$, $FP = 100$, $TN = 9400$.
+\end{exercise}
+
+\begin{exercise}
+	Compare LDA and logistic regression on a dataset where the true class-conditional distributions are Gaussians with different covariance matrices. Which method recovers the Bayes-optimal boundary? Why?
+\end{exercise}
+
+\begin{exercise}
+	Explain why decision trees have high variance. Use the concept of hierarchical partitioning: how many possible trees exist for $n$ points in $\R^2$?
+\end{exercise}

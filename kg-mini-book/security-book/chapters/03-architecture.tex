@@ -1,0 +1,244 @@
+\chapter{Processor Architecture and Machine Code}
+\label{ch:architecture}
+
+\epigraph{``The CPU is not a magic black box. It is a deterministic state machine that executes a sequence of bytes.''}{}
+
+\learninggoal{
+	\item Describe the x86-64 register file and its conventions.
+	\item Read and write basic assembly instructions: mov, arithmetic, control flow, stack operations.
+	\item Explain the x86-64 calling convention (System V ABI) and stack frame layout.
+	\item Understand the relationship between C code and compiled assembly.
+	\item Relate architectural features to exploitation primitives.
+}
+
+\section{The x86-64 Register File}
+
+A processor operates on data stored in \emph{registers}, a small, extremely fast memory bank inside the CPU. x86-64 provides 16 general-purpose registers, each 64 bits wide:
+
+\begin{longtable}{p{2.5cm}p{3cm}p{6cm}}
+	\toprule
+	\textbf{Register}         & \textbf{Conventional name} & \textbf{Purpose}                    \\
+	\midrule
+	\texttt{rax}              & Accumulator                & Return value, intermediate results  \\
+	\texttt{rbx}              & Base                       & Callee-saved                        \\
+	\texttt{rcx}              & Counter                    & Loop count, shift count             \\
+	\texttt{rdx}              & Data                       & Multiplication/division, I/O        \\
+	\texttt{rsi}              & Source index               & String operations, argument \#2     \\
+	\texttt{rdi}              & Destination index          & String operations, argument \#1     \\
+	\texttt{rsp}              & Stack pointer              & Top of the stack (callee-saved)     \\
+	\texttt{rbp}              & Base pointer               & Start of stack frame (callee-saved) \\
+	\texttt{r8}--\texttt{r15} & Extended registers         & General purpose, argument \#5--\#6  \\
+	\bottomrule
+\end{longtable}
+
+Additionally, x86-64 provides:
+
+\begin{itemize}
+	\item \textbf{Instruction pointer} (\texttt{rip}): address of the next instruction to execute.
+	\item \textbf{Flags register} (\texttt{rflags}): condition codes (zero, carry, overflow, sign) set by arithmetic instructions.
+	\item \textbf{XMM registers} (\texttt{xmm0}--\texttt{xmm15}): 128-bit registers for floating-point and SIMD operations.
+	\item \textbf{Segment registers} (\texttt{cs}, \texttt{ds}, \texttt{es}, \texttt{fs}, \texttt{gs}): used for thread-local storage and privilege level tracking.
+\end{itemize}
+
+\subsection{Sub-Register Access}
+
+x86-64 maintains backward compatibility with earlier x86 generations. The lower portions of each register are independently addressable:
+
+\begin{lstlisting}[caption=rax and its sub-registers]
+  |63--------------32|31------16|15-8|7-0|
+  |    rax (64-bit)  |
+  |    eax (32-bit)  |
+  |        ax (16-bit)|
+  |        ah | al   |
+\end{lstlisting}
+
+Writing to a 32-bit sub-register (\texttt{eax}) zero-extends to the full 64-bit register. Writing to a 16-bit or 8-bit sub-register (\texttt{ax}, \texttt{al}) preserves the upper bits.
+
+\section{Basic Instructions}
+
+\subsection{Data Movement}
+
+\begin{lstlisting}[caption=Data movement instructions (AT\&T syntax)]
+  mov %rax, %rbx    # rbx = rax
+  mov $42, %rax     # rax = 42 (immediate)
+  mov (%rax), %rbx  # rbx = *rax (load from address in rax)
+  mov %rax, (%rbx)  # *rbx = rax (store to address in rbx)
+  lea (%rax,%rbx), %rcx  # rcx = rax + rbx (address arithmetic)
+\end{lstlisting}
+
+The \texttt{mov} instruction copies data between registers, memory, and immediates. Crucially, x86-64 does not allow memory-to-memory moves---at most one operand can be a memory reference.
+
+\begin{definition}[Memory Operand]
+	A \textbf{memory operand} is specified as \texttt{disp(base, index, scale)}, which computes address = \texttt{base + index $\times$ scale + disp}. For example, \texttt{-4(%rbp, %rax, 8)} computes \texttt{rbp + rax*8 - 4}.
+\end{definition}
+
+\subsection{Arithmetic}
+
+\begin{lstlisting}[caption=Arithmetic instructions]
+  add %rax, %rbx    # rbx = rbx + rax
+  sub $8, %rsp      # rsp = rsp - 8 (allocate stack space)
+  imul %rax, %rbx   # rbx = rbx * rax (signed multiply)
+  xor %rax, %rax    # rax = 0 (common idiom)
+  inc %rax          # rax = rax + 1
+  dec %rax          # rax = rax - 1
+  cmp %rax, %rbx    # set flags based on rbx - rax
+  test %rax, %rax   # set flags based on rax & rax
+\end{lstlisting}
+
+The \texttt{xor \%rax, \%rax} idiom is preferred over \texttt{mov \$0, \%rax} because it is shorter (two bytes vs. seven) and does not read a value from memory.
+
+\subsection{Control Flow}
+
+\begin{lstlisting}[caption=Control flow instructions]
+  jmp label         # unconditional jump
+  je label          # jump if equal (ZF=1)
+  jne label         # jump if not equal (ZF=0)
+  jg label          # jump if greater (signed)
+  jl label          # jump if less (signed)
+  jge label         # jump if greater or equal
+  jle label         # jump if less or equal
+  call label        # push return address, then jmp
+  ret               # pop return address and jmp
+\end{lstlisting}
+
+\section{The Calling Convention}
+\label{sec:calling-conventions}
+
+The \emph{calling convention} defines the rules for function calls: how arguments are passed, how the return value is delivered, which registers must be preserved, and who cleans up the stack.
+
+x86-64 Linux uses the \textbf{System V AMD64 ABI}. The key rules:
+
+\begin{enumerate}
+	\item \textbf{Arguments:} first six integer/pointer arguments in \texttt{rdi}, \texttt{rsi}, \texttt{rdx}, \texttt{rcx}, \texttt{r8}, \texttt{r9}. Subsequent arguments on the stack, right-to-left.
+	\item \textbf{Return value:} \texttt{rax} for integer/pointer, \texttt{xmm0} for floating-point.
+	\item \textbf{Callee-saved registers:} \texttt{rbx}, \texttt{rbp}, \texttt{r12}--\texttt{r15}. The callee must restore these before returning.
+	\item \textbf{Caller-saved registers:} all others. The caller must save them before a call if needed afterward.
+	\item \textbf{Stack alignment:} the stack must be 16-byte aligned at the point of a \texttt{call} instruction.
+\end{enumerate}
+
+\begin{example}[Compiling a C Function]
+	Consider the C function:
+	\begin{lstlisting}[language=C]
+int add_and_multiply(int a, int b, int c) {
+    return (a + b) * c;
+}
+	\end{lstlisting}
+	Compiled (with \texttt{-O2}):
+	\begin{lstlisting}[language=ASM]
+add_and_multiply:
+    lea    (%rdi,%rsi), %eax    # eax = a + b
+    imul   %edx, %eax           # eax = eax * c
+    ret
+	\end{lstlisting}
+	The function uses only registers: \texttt{rdi = a}, \texttt{rsi = b}, \texttt{rdx = c}. No stack frame needed.
+\end{example}
+
+\section{Stack Frame Layout}
+
+When a function does need a stack frame (local variables, saved registers), the layout is:
+
+\begin{lstlisting}[caption=Typical stack frame layout]
+  High addresses
+  +---------------------------+
+  | Argument N (if > 6 args)  |
+  +---------------------------+
+  | ...                        |
+  +---------------------------+
+  | Argument 7                 |
+  +---------------------------+
+  | Return address             |  <- pushed by `call`
+  +---------------------------+
+  | Saved rbp                  |  <- pushed by `push %rbp`
+  +---------------------------+
+  | Local variables            |  <- allocated by `sub $N, %rsp`
+  | (and callee-saved regs)    |
+  +---------------------------+  <- rsp after prologue
+  Low addresses
+\end{lstlisting}
+
+\begin{definition}[Function Prologue and Epilogue]
+	The \textbf{prologue} sets up the stack frame: \texttt{push \%rbp; mov \%rsp, \%rbp; sub \$N, \%rsp}. The \textbf{epilogue} tears it down: \texttt{mov \%rbp, \%rsp; pop \%rbp; ret}. With frame-pointer optimisation (\texttt{-fomit-frame-pointer}), the prologue is just \texttt{sub \$N, \%rsp} and \texttt{rbp} is used as a general-purpose register.
+\end{definition}
+
+\section{Instruction Encoding}
+
+x86-64 uses a variable-length instruction encoding. Instructions range from 1 to 15 bytes. This is relevant to security because:
+
+\begin{itemize}
+	\item \textbf{Disassembly is non-trivial:} a single-byte offset error in disassembly can produce a completely different instruction stream (instruction misalignment).
+	\item \textbf{Return-oriented programming (ROP)} exploits reuse short instruction sequences (\emph{gadgets}) that end with \texttt{ret} (0xC3). The variable-length encoding means that gadgets can be found at unaligned offsets within legitimate instructions.
+\end{itemize}
+
+\begin{example}[Misaligned Disassembly]
+	Consider the bytes: \texttt{48 89 c3 90 c3}. At the correct alignment:
+	\begin{lstlisting}[language=ASM]
+  mov %rax, %rbx    # 48 89 c3
+  nop               # 90
+  ret               # c3
+	\end{lstlisting}
+	But starting from offset 1:
+	\begin{lstlisting}[language=ASM]
+  89 c3             # mov %eax, %ebx (32-bit form)
+  90                # nop
+  c3                # ret
+	\end{lstlisting}
+	The first instruction decoded depends on where you start. This is why ROP gadget discovery walks through all byte offsets looking for \texttt{ret} (0xC3).
+\end{example}
+
+\section{System Calls}
+
+User-mode code cannot directly access hardware or kernel data structures. It must use \emph{system calls} to request kernel services.
+
+\begin{lstlisting}[caption=System call invocation on x86-64]
+  ; write(1, "hello\n", 6)
+  mov $1, %rax       # syscall number (write = 1)
+  mov $1, %rdi       # fd = stdout
+  lea message(%rip), %rsi  # buf
+  mov $6, %rdx       # count
+  syscall            # trap to kernel
+\end{lstlisting}
+
+The syscall convention on x86-64 Linux:
+\begin{itemize}
+	\item Syscall number in \texttt{rax}.
+	\item Arguments in \texttt{rdi}, \texttt{rsi}, \texttt{rdx}, \texttt{r10}, \texttt{r8}, \texttt{r9}.
+	\item Return value in \texttt{rax} (negative = error).
+	\item \texttt{syscall} instruction clobbers \texttt{rcx} and \texttt{r11}.
+\end{itemize}
+
+\section{From Architecture to Exploitation}
+
+Understanding architecture is essential for exploitation because:
+
+\begin{enumerate}
+	\item \textbf{Control flow hijacking} targets the return address on the stack or function pointers in memory. You need to know exactly where these live relative to your input buffer.
+	\item \textbf{Shellcode} must be position-independent machine code that performs a desired action (e.g., \texttt{execve("/bin/sh")}). It cannot contain null bytes (which terminate C strings).
+	\item \textbf{ROP} chains require precise knowledge of gadget addresses, register state, and calling conventions.
+\end{enumerate}
+
+\begin{principle}[The Architecture Is the Attack Surface]
+	Every architectural feature---registers, stack, calling convention, page tables, syscall interface---is a potential target. The attacker does not fight the architecture; they use it exactly as designed.
+\end{principle}
+
+\section{Exercises}
+
+\begin{exercise}
+	Write a C function that takes four integer arguments and returns their sum. Compile it with \texttt{gcc -O2 -S} and read the assembly. Which registers hold the arguments? Why isn't the stack used?
+\end{exercise}
+
+\begin{exercise}
+	Given the following C code, write the corresponding x86-64 assembly (by hand):
+	\begin{lstlisting}[language=C]
+int max(int a, int b) {
+    return (a > b) ? a : b;
+}
+	\end{lstlisting}
+\end{exercise}
+
+\begin{exercise}
+	The function \texttt{fflush(NULL)} is a common buffer overflow target. Search for ``FFLUSH'' in Phrack~\cite{aleph1996smashing} and explain why the \texttt{call} instruction's return address push is the foundation of stack smashing.
+\end{exercise}
+
+\begin{exercise}
+	Why does the System V ABI require 16-byte stack alignment before \texttt{call}? (Hint: some SSE2 instructions require 16-byte aligned memory operands.)
+\end{exercise}

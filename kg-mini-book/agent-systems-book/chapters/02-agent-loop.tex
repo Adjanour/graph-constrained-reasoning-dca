@@ -1,0 +1,209 @@
+\chapter{The Agent Loop Architecture}
+\label{ch:agent-loop}
+
+\epigraph{``The loop is not the implementation. The loop is the contract.''}{}
+
+\learninggoal{
+	\item Decompose the agent loop into its essential phases.
+	\item Understand the message-passing model that underlies all agent frameworks.
+	\item Distinguish between reactive, deliberative, and reflective loop variants.
+	\item Compare state management strategies across frameworks.
+}
+
+\section{The Universal Loop}
+
+Every agent---from a single-prompt tool caller to a multi-agent swarm---implements the same abstract loop. The implementation differs, but the phases are universal:
+
+\begin{enumerate}
+	\item \textbf{Observe:} read the current state of the environment (sensors, API responses, user input).
+	\item \textbf{Think:} reason about what action to take given the current state and goal.
+	\item \textbf{Act:} execute the chosen action (tool call, response, internal state update).
+	\item \textbf{Reflect:} evaluate the outcome and adjust future behaviour.
+\end{enumerate}
+
+\begin{definition}[Agent Loop]
+	An \textbf{agent loop} is a control structure that repeatedly invokes an \llm\ as a reasoning engine, passing in observations and memory, parsing structured actions from the output, executing them, and incorporating results into the next iteration.
+\end{definition}
+
+\section{The Message-Passing Model}
+
+The cleanest abstraction for an agent loop is \emph{message passing}. Every component---LLM, tool, memory store, user---is a node that sends and receives messages.
+
+\begin{lstlisting}[caption=Message types in the agent loop]
+  // Core message types
+  Message ::= {
+    role:    "system" | "user" | "assistant" | "tool",
+    content: string,
+    tool_calls?: ToolCall[],   // assistant only
+    tool_result?: string,       // tool only
+    metadata?:  { key: value }
+  }
+
+  // Loop invariant
+  messages[0].role == "system"  // first message is the system prompt
+  messages[-1].role != "assistant"  // last message is pending
+\end{lstlisting}
+
+This model has several desirable properties:
+\begin{itemize}
+	\item \textbf{Immutability:} old messages are never modified, only appended. This enables replay, debugging, and checkpointing.
+	\item \textbf{Determinism:} given the same message history and seed, the same actions are produced.
+	\item \textbf{Inspectability:} the full decision trace is available for logging and evaluation.
+	\item \textbf{Tool integration:} tool results are just messages with a special \texttt{role}.
+\end{itemize}
+
+\section{Loop Variants}
+
+\subsection{Reactive Loop}
+
+The simplest variant: observe $\to$ act, no explicit reasoning step.
+
+\begin{lstlisting}[caption=Reactive agent loop]
+  messages = [system_prompt]
+  while not done:
+      user_input = input()
+      messages.append({"role": "user", "content": user_input})
+      response = llm(messages)
+      messages.append({"role": "assistant", "content": response})
+\end{lstlisting}
+
+This is effectively a chatbot. It is an agent only if the response can trigger side effects (e.g., ``send this email'').
+
+\subsection{Reason-Act Loop (ReAct)}
+
+The canonical agent loop: interleave reasoning traces with actions.
+
+\begin{lstlisting}[caption=ReAct-style loop]
+  messages = [system_prompt, user_query]
+  while not done:
+      response = llm(messages)           // Think
+      action   = parse_action(response)   // Parse structured output
+      if action.type == "final_answer":
+          return action.content           // Done
+      result   = execute_tool(action)     // Act
+      messages.append(response)
+      messages.append({"role": "tool",   // Observe
+                       "content": result})
+\end{lstlisting}
+
+This was formalised by Yao et al.~\cite{yao2023react} and is the basis of most production agent systems. The key insight is that the reasoning trace (\emph{thought}) and the action are generated in the same forward pass, eliminating the overhead of a separate planner.
+
+\subsection{Reflective Loop (Reflexion)}
+
+Add an explicit evaluation step after action execution:
+
+\begin{lstlisting}[caption=Reflexion-style loop]
+  while not done:
+      trajectory = []
+      while not subtask_done:
+          action = reason_and_act(state)
+          trajectory.append(action)
+      reflection = reflect(trajectory)     // Evaluate
+      memory.add(reflection)               // Learn
+\end{lstlisting}
+
+Reflexion~\cite{shinn2023reflexion} adds a \texttt{reflect} step that generates a natural-language summary of what went wrong and what to change. This summary is stored in memory and influences future episodes. It converts trial-and-error into verbal reinforcement learning.
+
+\subsection{Hierarchical Loop}
+
+For complex tasks, a single loop is insufficient. Hierarchical agents use a manager--worker pattern:
+
+\begin{lstlisting}[caption=Hierarchical agent loops]
+  manager_loop():
+      goal = receive_goal()
+      plan = decompose(goal)            // Break into sub-tasks
+      for subtask in plan:
+          result = worker_loop(subtask) // Delegate to sub-agent
+          verify(result, goal)
+      return assemble(plan, results)
+
+  worker_loop(subtask):
+      for step in subtask.steps:
+          action = reason(step)
+          execute(action)
+      return output
+\end{lstlisting}
+
+The key design decision is the \emph{granularity of decomposition}: too coarse and workers are overloaded; too fine and coordination overhead dominates.
+
+\section{State Management}
+
+Every agent loop must maintain state across iterations. The state includes:
+
+\begin{itemize}
+	\item \textbf{Message history:} the full conversation (grows unboundedly).
+	\item \textbf{Execution context:} variables, file handles, authentication tokens.
+	\item \textbf{Plan state:} which steps are done, which remain.
+	\item \textbf{Memory:} long-term knowledge stored beyond the current session.
+\end{itemize}
+
+\subsection{Context Window Management}
+
+The message history grows with every loop iteration, eventually exceeding the \llm 's context window. Common strategies:
+
+\begin{longtable}{p{3.5cm}p{4cm}p{4cm}p{3cm}}
+	\toprule
+	\textbf{Strategy}   & \textbf{Mechanism}                  & \textbf{Trade-off}         & \textbf{Used by}  \\
+	\midrule
+	Sliding window      & Drop oldest messages                & Loses early context        & Simple chatbots   \\
+	Summary compression & Replace old messages with a summary & Loses detail, adds latency & LangChain         \\
+	Token budget        & Evict least-relevant messages       & Relevance heuristic needed & Custom            \\
+	Structured memory   & Store key info in external DB       & Requires retrieval infra   & Production agents \\
+	\bottomrule
+\end{longtable}
+
+\begin{principle}[Token Budgeting]
+	An agent should never exceed 80\% of its context window during normal operation. The remaining 20\% is a safety margin for tool outputs and unexpected long responses.
+\end{principle}
+
+\subsection{Checkpointing}
+
+Production agents checkpoint their state at every loop iteration:
+
+\begin{lstlisting}[caption=Agent checkpoint structure]
+  Checkpoint ::= {
+    id:            UUID,
+    messages:      Message[],
+    memory_snapshot: { key: value },
+    plan_state:    { completed: Step[], pending: Step[] },
+    tool_states:   { connection_id: state },
+    created_at:    timestamp
+  }
+\end{lstlisting}
+
+Checkpoints enable:
+\begin{itemize}
+	\item \textbf{Fault recovery:} restart from the last checkpoint after a crash.
+	\item \textbf{Forking:} try alternative actions from a given point.
+	\item \textbf{Audit:} replay the full decision trace.
+\end{itemize}
+
+\section{Framework Comparison}
+
+All agent frameworks implement the same core loop but differ in how they structure reasoning, tools, and memory.
+
+\begin{longtable}{p{2.5cm}p{3.5cm}p{3.5cm}p{3.5cm}}
+	\toprule
+	\textbf{Framework} & \textbf{Loop model}          & \textbf{Tool model}                 & \textbf{State management}           \\
+	\midrule
+	LangChain          & ReAct-style graph            & Decorated functions, structured I/O & Message window, optional checkpoint \\
+	AutoGen            & Multi-agent conversation     & Agent-registered functions          & Full message history                \\
+	CrewAI             & Hierarchical manager--worker & Per-role tool sets                  & MongoDB checkpointing               \\
+	Semantic Kernel    & Stepwise planner             & Plugin registry, OpenAPI import     & Volatile by default                 \\
+	OpenAI Assistants  & Managed loop (hosted)        & Function definition API             & Server-side checkpointing           \\
+	\bottomrule
+\end{longtable}
+
+\section{Exercises}
+
+\begin{exercise}
+	Implement a ReAct agent loop from scratch in pseudocode (no framework). Your loop must support: multiple tools, error handling for tool failures, and a maximum iteration limit.
+\end{exercise}
+
+\begin{exercise}
+	Compare the context-window management strategies above for an agent that processes a 10-turn conversation with 3 tool calls per turn. Compute total token usage for each strategy.
+\end{exercise}
+
+\begin{exercise}
+	Design a checkpoint format for an agent that manages a multi-file code change. What state must be saved beyond the message history?
+\end{exercise}

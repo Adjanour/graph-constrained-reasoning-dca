@@ -1,0 +1,245 @@
+\chapter{The Machine Learning Pipeline}
+\label{ch:pipeline}
+
+\epigraph{``In production, the model is 5\% of the code. The pipeline is the other 95\%.''}{}
+
+\learninggoal{
+	\item Design a complete ML pipeline from raw data to deployed model.
+	\item Integrate feature engineering, model selection, and evaluation into a reproducible workflow.
+	\item Understand MLOps concerns: versioning, monitoring, drift detection.
+	\item Recognize when ML is the right tool and when simpler alternatives suffice.
+}
+
+\section{The End-to-End Pipeline}
+
+A production ML system involves far more than training a model:
+
+\begin{lstlisting}[caption=The ML pipeline stages]
+  1. Data ingestion     -- collect, validate, store raw data
+  2. Data cleaning      -- handle missing values, outliers, duplicates
+  3. Feature engineering-- transform, encode, select features
+  4. Model training     -- select algorithm, tune hyperparameters
+  5. Model evaluation   -- validate, compare, select final model
+  6. Model deployment   -- serve predictions via API or batch
+  7. Monitoring         -- track performance, detect drift
+  8. Retraining         -- update model with new data
+\end{lstlisting}
+
+\section{Data Ingestion and Validation}
+
+Before any modelling, ensure data quality:
+
+\begin{itemize}
+	\item \textbf{Schema validation:} check column names, types, value ranges.
+	\item \textbf{Statistical validation:} check mean, variance, null ratios against expected ranges.
+	\item \textbf{Integrity checks:} unique key constraints, referential integrity.
+	\item \textbf{Temporal validation:} ensure no leakage from future to past.
+\end{itemize}
+
+Tools: Great Expectations, Deequ, Pandera.
+
+\section{Data Cleaning}
+
+\subsection{Outlier Detection}
+
+Statistical methods for identifying anomalous points:
+
+\[
+	\text{Is outlier if } |x - \mu| > 3\sigma \quad \text{(Z-score method)}
+\]
+\[
+	\text{Is outlier if } x < Q_1 - 1.5 \cdot \text{IQR} \text{ or } x > Q_3 + 1.5 \cdot \text{IQR}
+\]
+
+For high-dimensional data, use isolation forest, LOF, or autoencoder reconstruction error.
+
+\subsection{Duplicate Detection}
+
+Duplicate rows inflate the effective sample size and bias the model. Identify exact duplicates and near-duplicates (using Jaccard similarity or MinHash).
+
+\section{Feature Store}
+
+A feature store is a centralized repository for feature definitions and computations:
+
+\begin{itemize}
+	\item \textbf{Online store:} low-latency feature serving for real-time predictions (Redis, DynamoDB).
+	\item \textbf{Offline store:} batch feature computation for training (Parquet files, BigQuery).
+	\item \textbf{Feature registry:} metadata about feature definitions, owners, and dependencies.
+	\item \textbf{Point-in-time correctness:} ensure training features use only information available at prediction time.
+\end{itemize}
+
+\begin{principle}[Point-in-Time Correctness]
+	When joining features for training, use only data that was available at the time of prediction. A common bug: using future information (e.g., a feature computed from the full dataset) that is not available in production.
+\end{principle}
+
+\section{Experiment Tracking}
+
+Every ML experiment should be recorded:
+
+\begin{itemize}
+	\item \textbf{Data:} dataset version, hash, split indices.
+	\item \textbf{Code:} git commit, hyperparameters, model architecture.
+	\item \textbf{Results:} metrics (training, validation, test), learning curves.
+	\item \textbf{Artifacts:} model weights, scalers, encoders, preprocessing config.
+\end{itemize}
+
+Tools: MLflow, Weights \& Biases, Neptune, DVC.
+
+\section{Model Deployment}
+
+\subsection{Batch Inference}
+
+Predict on a schedule (hourly, daily). Simple: read data, apply model, write predictions to a database.
+
+\[
+	\text{Scalability:} \text{partition data by date, process in parallel with Spark or Dask.}
+\]
+
+\subsection{Real-Time Inference}
+
+Serve predictions via an API with millisecond latency:
+
+\begin{lstlisting}[language=Python, caption=Real-time model serving outline]
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+model = load_model('model.pkl')
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    features = request.json['features']
+    probs = model.predict_proba([features])[0]
+    return jsonify({
+        'prediction': int(probs[1] > 0.5),
+        'probability': float(probs[1])
+    })
+\end{lstlisting}
+
+\subsection{Streaming Inference}
+
+Predict on individual events as they arrive (Kafka, Kinesis):
+
+\[
+	\text{Event} \to \text{Feature computation} \to \text{Model prediction} \to \text{Action}
+\]
+
+\section{Monitoring and Drift Detection}
+
+\subsection{Concept Drift}
+
+The relationship $P(y \mid \mathbf{x})$ changes over time:
+
+\begin{itemize}
+	\item \textbf{Sudden drift:} abrupt change (e.g., new regulation).
+	\item \textbf{Gradual drift:} slow change (e.g., aging population).
+	\item \textbf{Seasonal drift:} recurring pattern (e.g., holiday shopping).
+\end{itemize}
+
+\subsection{Data Drift}
+
+The input distribution $P(\mathbf{x})$ changes:
+
+\[
+	D_{\text{KL}}(P_{\text{train}}(\mathbf{x}) \parallel P_{\text{current}}(\mathbf{x})) > \text{threshold}
+\]
+
+Monitor per-feature statistics (mean, variance, quantiles) over sliding windows.
+
+\subsection{Performance Monitoring}
+
+Track the same metrics used during evaluation:
+
+\begin{itemize}
+	\item Accuracy, precision, recall (requires labels, which may be delayed).
+	\item Proxy metrics when labels are unavailable (prediction distribution, feature statistics).
+	\item Business metrics: revenue, conversion rate, user engagement.
+\end{itemize}
+
+\section{Retraining Strategies}
+
+\begin{longtable}{p{3cm}p{4cm}p{5cm}}
+	\toprule
+	\textbf{Strategy}     & \textbf{Trigger}                  & \textbf{Trade-off}              \\
+	\midrule
+	Scheduled             & Time-based (weekly, monthly)      & Simple but wasteful             \\
+	Performance-triggered & Metric drops below threshold      & Requires labeling pipeline      \\
+	Drift-triggered       & Feature/target distribution shift & No labels needed, early warning \\
+	Online learning       & Continuous update per batch       & Fast adaptation, complex ops    \\
+	\bottomrule
+\end{longtable}
+
+\section{When Not to Use ML}
+
+Not every problem needs machine learning:
+
+\begin{itemize}
+	\item \textbf{Simple heuristics:} if $y = \text{sign}(x_1 > 5)$, write a rule.
+	\item \textbf{Lookup tables:} if the mapping is fixed and enumerable.
+	\item \textbf{Linear regression:} if the relationship is linear and $d < 10$.
+	\item \textbf{When data is scarce:} ML needs data. With $n < 100$, use simple methods or domain knowledge.
+\end{itemize}
+
+\begin{principle}[Occam's Razor in ML]
+	Among models with similar performance, choose the simplest. Simpler models are easier to debug, deploy, explain, and maintain. Start with linear regression before trying XGBoost; start with a baseline heuristic before training a neural network.
+\end{principle}
+
+\section{Ethical Considerations}
+
+\begin{itemize}
+	\item \textbf{Fairness:} Does the model perform equally across demographic groups? Check disparate impact: $\frac{P(\hat{y}=1 \mid A)}{P(\hat{y}=1 \mid B)}$.
+	\item \textbf{Bias in data:} If the training data reflects historical discrimination, the model will perpetuate it.
+	\item \textbf{Explainability:} Stakeholders need to understand why a prediction was made. Use SHAP, LIME, or inherently interpretable models (GLMs, decision trees).
+	\item \textbf{Privacy:} Models can memorize training data. Use differential privacy or federated learning for sensitive data.
+\end{itemize}
+
+\section{The ML Pipeline in Practice}
+
+\begin{lstlisting}[language=Python, caption=Complete pipeline sketch]
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+
+pipeline = Pipeline([
+    ('preprocess', ColumnTransformer([
+        ('num', StandardScaler(), numeric_cols),
+        ('cat', OneHotEncoder(), categorical_cols)
+    ])),
+    ('model', RandomForestRegressor())
+])
+
+# Train with cross-validation
+scores = cross_val_score(
+    pipeline, X_train, y_train,
+    cv=5, scoring='neg_root_mean_squared_error'
+)
+print(f'CV RMSE: {-scores.mean():.3f} +/- {scores.std():.3f}')
+
+# Final fit
+pipeline.fit(X_train, y_train)
+
+# Evaluate once
+y_pred = pipeline.predict(X_test)
+test_rmse = mean_squared_error(y_test, y_pred, squared=False)
+print(f'Test RMSE: {test_rmse:.3f}')
+\end{lstlisting}
+
+\section{Exercises}
+
+\begin{exercise}
+	Design an ML pipeline for a churn prediction system. List each stage, the tools you would use, and how you would handle data leakage between training and inference.
+\end{exercise}
+
+\begin{exercise}
+	Monitor a deployed model for drift. Compute the population stability index (PSI) for each feature:
+	\[
+		\text{PSI} = \sum_{k} (p_k^{\text{train}} - p_k^{\text{current}}) \log\frac{p_k^{\text{train}}}{p_k^{\text{current}}}
+	\]
+	where $p_k$ is the proportion of values in bin $k$. A PSI $> 0.1$ indicates drift.
+\end{exercise}
+
+\begin{exercise}
+	Your production model's accuracy drops from 92\% to 85\% over a week. Outline a debugging plan. How would you distinguish between data drift, concept drift, and a software bug?
+\end{exercise}
+
+\begin{exercise}
+	A stakeholder asks you to build an ML model to predict employee performance from their resume. Identify three ethical concerns with this task. What data would you need to audit for fairness?
+\end{exercise}

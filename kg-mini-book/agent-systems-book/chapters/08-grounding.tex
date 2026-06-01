@@ -1,0 +1,221 @@
+\chapter{Grounding and Reliability}
+\label{ch:grounding}
+
+\epigraph{``An ungrounded agent is a hallucination engine with side effects.''}{}
+
+\learninggoal{
+	\item Define grounding and distinguish its dimensions (factual, contextual, procedural).
+	\item Implement self-verification and consistency checks.
+	\item Design human-in-the-loop feedback mechanisms.
+	\item Understand the limits of grounding---what cannot be verified.
+}
+
+\section{The Grounding Problem}
+
+Agents operate in the real world. When they act on incorrect information, the consequences are real. \textbf{Grounding} is the process of ensuring that an agent's beliefs, decisions, and actions are based on verifiable facts rather than model hallucination.
+
+\begin{definition}[Grounding]
+	An agent action is \textbf{grounded} if its justification is traceable to:
+	\begin{enumerate}
+		\item A trusted external source (database, API, document), or
+		\item A verifiable chain of reasoning, or
+		\item Explicit user confirmation.
+	\end{enumerate}
+	Actions that cannot satisfy any of these criteria are \textbf{ungrounded}.
+\end{definition}
+
+\subsection{Types of Grounding Failure}
+
+\begin{longtable}{p{3.5cm}p{4.5cm}p{4.5cm}p{2.5cm}}
+	\toprule
+	\textbf{Failure type} & \textbf{Description}                & \textbf{Example}                  & \textbf{Detection} \\
+	\midrule
+	Factual               & Agent asserts false information     & ``The Eiffel Tower is in London'' & Cross-reference    \\
+	Contextual            & Agent contradicts provided context  & Ignores retrieved documents       & Consistency check  \\
+	Procedural            & Agent executes wrong procedure      & Calls wrong API with wrong args   & Schema validation  \\
+	Planning              & Agent's plan cannot achieve goal    & Missing critical step             & Plan verification  \\
+	Calibration           & Agent overconfident in wrong answer & High confidence, wrong result     & Confidence scoring \\
+	\bottomrule
+\end{longtable}
+
+\section{Self-Verification}
+
+The agent verifies its own outputs before acting:
+
+\begin{lstlisting}[caption=Self-verification loop]
+  def grounded_action(action, context):
+      """Execute action only if verification passes."""
+      # Step 1: Verify factual claims
+      claims = extract_claims(action)
+      for claim in claims:
+          evidence = retrieve_evidence(claim)
+          if not supports(evidence, claim):
+              return reject(f"Unsupported claim: {claim}")
+
+      # Step 2: Verify procedure
+      if action.type == "tool_call":
+          if not validate_schema(action, tool_registry):
+              return reject("Invalid tool arguments")
+          if not verify_prerequisites(action, context):
+              return reject("Prerequisites not met")
+
+      # Step 3: Verify plan coherence
+      if action.type == "plan":
+          verification = verify_plan(action, context.goal)
+          if not verification.passes:
+              return reject(verification.reason)
+
+      return execute(action)
+\end{lstlisting}
+
+\subsection{Self-Consistency}
+
+Sample multiple reasoning paths and check agreement:
+
+\begin{equation}
+	\text{consistency}(x) = \frac{2}{k(k-1)} \sum_{i<j} \mathbbm{1}\{f(x; \theta_i) = f(x; \theta_j)\}
+\end{equation}
+
+where $f$ is the agent's output and $\theta_i$ are independent samples (using temperature $\tau > 0$). Low consistency ($< 0.6$) indicates uncertainty.
+
+\begin{principle}[Consistency Threshold]
+	An agent should not execute an action with semantic consistency below 0.6 without human confirmation. The threshold is task-dependent: lower for reversible actions, higher for irreversible ones.
+\end{principle}
+
+\section{Human-in-the-Loop}
+
+Some decisions are too important to trust to the agent alone. Human-in-the-loop (HITL) mechanisms provide a safety net.
+
+\subsection{Approval Gates}
+
+Sensitive actions require human approval before execution:
+
+\begin{lstlisting}[caption=Approval gate flow]
+  def execute_with_gate(action, user_channel):
+      if action.requires_approval:
+          prompt = f"""Approve this action?
+          Action: {action.description}
+          Arguments: {action.args}
+          Consequences: {action.consequences}
+          Reply 'approve' or 'reject'."""
+
+          response = send_to_user(user_channel, prompt)
+          if response != "approve":
+              return reject("User rejected action")
+      return execute(action)
+\end{lstlisting}
+
+Which actions should require approval?
+
+\begin{itemize}
+	\item \textbf{Always require approval:} irreversible actions (sending email, deleting files, making payments).
+	\item \textbf{Conditional approval:} actions exceeding a cost/user/scope threshold.
+	\item \textbf{Review after:} read-only actions that can be reverted (search, data retrieval).
+\end{itemize}
+
+\subsection{Escalation}
+
+When the agent cannot resolve an ambiguity, it escalates:
+
+\begin{lstlisting}[caption=Escalation logic]
+  def should_escalate(state):
+      reasons = []
+      if len(state.uncertain_claims) > 3:
+          reasons.append("Too many uncertain claims")
+      if state.same_error_count > 2:
+          reasons.append("Repeated failure on same action")
+      if state.confidence < 0.3:
+          reasons.append("Overall confidence too low")
+      if time_since_last_confirmation > 10_minutes:
+          reasons.append("Long operation without user check")
+      return reasons
+
+  def escalate(state, user_channel):
+      summary = format_escalation_summary(state)
+      send_to_user(user_channel, summary)
+      response = wait_for_user_guidance()
+      return response
+\end{lstlisting}
+
+\section{Tool Output Verification}
+
+Tool outputs can be wrong, corrupted, or malicious. The agent must verify them:
+
+\begin{lstlisting}[caption=Tool output verification]
+  def verify_tool_output(output, expected_schema):
+      """Check tool output for integrity and correctness."""
+      checks = []
+
+      # Schema validation
+      try:
+          parsed = json.loads(output)
+          validate_schema(parsed, expected_schema)
+          checks.append(("schema", True))
+      except:
+          checks.append(("schema", False))
+
+      # Range checks (if applicable)
+      if expected_schema.get("type") == "number":
+          min_val = expected_schema.get("minimum", -inf)
+          max_val = expected_schema.get("maximum", inf)
+          in_range = min_val <= parsed <= max_val
+          checks.append(("range", in_range))
+
+      # Consistency with prior knowledge
+      if known_facts := retrieve_related_facts(output):
+          consistent = check_consistency(output, known_facts)
+          checks.append(("consistency", consistent))
+
+      return all(passed for _, passed in checks)
+\end{lstlisting}
+
+\section{Calibration}
+
+An agent is \textbf{calibrated} if its confidence matches its reliability:
+
+\begin{equation}
+	\mathbb{P}(\text{action succeeds} \mid \text{confidence} = c) = c \quad \forall c \in [0, 1]
+\end{equation}
+
+Measuring calibration requires logging confidence and outcomes over many episodes:
+
+\begin{equation}
+	\text{ECE} = \sum_{m=1}^{M} \frac{|B_m|}{N} \left|\text{acc}(B_m) - \overline{\text{conf}}(B_m)\right|
+\end{equation}
+
+where $B_m$ are confidence bins (e.g., 0.0--0.1, 0.1--0.2, \dots).
+
+If the agent is miscalibrated (common: overconfident in wrong answers), the confidence scores can be post-hoc calibrated using temperature scaling on the \llm's token probabilities.
+
+\section{The Limits of Grounding}
+
+Not everything can be grounded:
+
+\begin{itemize}
+	\item \textbf{Subjective judgments:} ``Is this design beautiful?'' cannot be verified against an external source.
+	\item \textbf{Creative tasks:} ``Write a poem'' has no correctness criterion.
+	\item \textbf{Future predictions:} ``Will it rain tomorrow?'' cannot be verified until tomorrow.
+	\item \textbf{Open-ended exploration:} ``What are possible solutions?'' the agent must explore without grounding.
+\end{itemize}
+
+\begin{principle}[Grounding-Aware Design]
+	An agent should know what it cannot ground and adjust its behaviour accordingly: express uncertainty, ask for confirmation, or flag actions as unverifiable.
+\end{principle}
+
+\section{Exercises}
+
+\begin{exercise}
+	Design a verification pipeline for a code-generation agent. For each generated function, what must be verified before execution? How do you handle dependencies (imports, libraries)?
+\end{exercise}
+
+\begin{exercise}
+	Implement a self-consistency check for a factual QA agent. Use $k=5$ samples, temperature $\tau=0.7$. Measure consistency against accuracy on a test set of 100 questions.
+\end{exercise}
+
+\begin{exercise}
+	Design an approval-gate policy for a personal finance agent (can read balances, schedule payments, and generate reports). Which actions are always gated, which are conditional, and which are unconstrained?
+\end{exercise}
+
+\begin{exercise}
+	An agent's calibration curve shows $\text{acc}(0.9) = 0.6$---it is overconfident. Propose a post-hoc calibration method. How would you validate it?
+\end{exercise}

@@ -1,0 +1,126 @@
+\documentclass[11pt,a4paper]{book}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{bbm}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{xspace}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{graphicx}
+\usepackage{epigraph}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage{dsfont}
+
+\setlength{\headheight}{14pt}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  columns=fullflexible,
+  frame=single,
+  backgroundcolor=\color{gray!5},
+  aboveskip=6pt,
+  belowskip=6pt,
+  extendedchars=true,
+  inputencoding=utf8,
+  showstringspaces=false
+}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[chapter]
+\newtheorem{theorem}{Theorem}[chapter]
+\newtheorem{lemma}{Lemma}[chapter]
+\newtheorem{corollary}{Corollary}[chapter]
+\newtheorem{principle}{Principle}[chapter]
+\newtheorem{example}{Example}[chapter]
+\newtheorem{remark}{Remark}[chapter]
+
+\theoremstyle{plain}
+\newtheorem{exercise}{Exercise}[chapter]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE,RO]{\leftmark}
+\fancyhead[RE,LO]{\rightmark}
+\fancyfoot[C]{\thepage}
+
+\titleformat{\chapter}[display]
+  {\bfseries\Large}
+  {\chaptername\ \thechapter}
+  {20pt}
+  {\Huge}
+
+\setlist{nosep}
+
+\newcommand{\learninggoal}[1]{\subsection*{Learning Goals}\begin{itemize}#1\end{itemize}}
+\newcommand{\keyinsight}[1]{\medskip\noindent\textbf{Key Insight:} #1\medskip}
+\newcommand{\takeaway}[1]{\medskip\noindent\textbf{Takeaway:} #1\medskip}
+\newcommand{\reading}[1]{\begin{quote}\small\textit{Recommended reading:} #1\end{quote}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathcal{N}}
+\newcommand{\X}{\mathcal{X}}
+\newcommand{\Y}{\mathcal{Y}}
+
+\begin{document}
+
+\title{\Huge\textbf{ML Fundamentals}\\[0.5cm]
+	\large Feature Engineering, Statistics, and the Core Ideas}
+\author{Bernard}
+\date{\today}
+\maketitle
+\thispagestyle{empty}
+
+\vfill
+\begin{quote}
+	\emph{``Machine learning is not magic. It is statistics plus computation plus a willingness to be wrong.''}
+\end{quote}
+\vfill
+
+\newpage
+\tableofcontents
+\newpage
+
+\part{Foundations}
+\include{chapters/01-introduction}
+\include{chapters/02-probability-statistics}
+\include{chapters/03-linear-algebra-optimization}
+
+\part{Core Methods}
+\include{chapters/04-regression}
+\include{chapters/05-classification}
+\include{chapters/06-feature-engineering}
+\include{chapters/07-dimensionality-reduction}
+
+\part{Practical Machine Learning}
+\include{chapters/08-evaluation}
+\include{chapters/09-regularization-ensembles}
+\include{chapters/10-ml-pipeline}
+
+\newpage
+\bibliographystyle{unsrtnat}
+\bibliography{references}
+
+\end{document}

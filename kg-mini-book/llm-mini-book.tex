@@ -1,0 +1,2194 @@
+\documentclass[11pt,a4paper]{book}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{bbm}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{graphicx}
+\usepackage{epigraph}
+\setlength{\headheight}{14pt}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  columns=fullflexible,
+  frame=single,
+  backgroundcolor=\color{gray!5}
+}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[chapter]
+\newtheorem{theorem}{Theorem}[chapter]
+\newtheorem{lemma}{Lemma}[chapter]
+\newtheorem{corollary}{Corollary}[chapter]
+\newtheorem{algorithm}{Algorithm}[chapter]
+\newtheorem{example}{Example}[chapter]
+\newtheorem{remark}{Remark}[chapter]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE,RO]{\leftmark}
+\fancyhead[RE,LO]{\rightmark}
+\fancyfoot[C]{\thepage}
+
+\titleformat{\chapter}[display]
+  {\bfseries\Large}
+  {\chaptername\ \thechapter}
+  {20pt}
+  {\Huge}
+
+\setlist{nosep}
+
+\begin{document}
+
+\title{\Huge\textbf{Large Language Models: \\ A Multifaceted Mini-Book}\\[1cm]
+	\large Information Theory, Deep Learning, Computer Theory,\\
+	Software Engineering, Inference, and GPU Architecture}
+\author{Bernard}
+\date{\today}
+\maketitle
+\thispagestyle{empty}
+\newpage
+
+\tableofcontents
+\newpage
+
+% ============================================================
+% Part I: Foundations
+% ============================================================
+\part{Foundations}
+
+% ============================================================
+\chapter{Information-Theoretic Foundations}
+\label{ch:info-theory}
+
+\epigraph{``The fundamental problem of communication is that of reproducing at one point either exactly or approximately a message selected at another point.''}{Claude Shannon, 1948}
+
+This chapter develops the information-theoretic lens through which large language models (LLMs) are best understood. Language modelling is, at its core, a problem of efficient coding: a good language model assigns high probability to the next token, minimising the number of bits needed to encode the message.
+
+\section{Entropy and Language}
+
+\begin{definition}[Entropy]
+	For a discrete random variable $X$ with distribution $p$, the Shannon entropy is
+	\begin{equation}
+		H(X) = -\sum_{x} p(x) \log_2 p(x) \quad\text{(bits)}.
+	\end{equation}
+	Entropy measures the \emph{minimum} number of bits required to encode $X$ on average.
+\end{definition}
+
+In natural language, the per-token entropy of English has been estimated at roughly $1.3$ bits/character (Shannon's game), though modern LLMs achieve cross-entropies well below $1$ bit/token on domain-specific corpora.
+
+\begin{definition}[Cross-Entropy]
+	Given a true distribution $p$ and a model $q$, the cross-entropy is
+	\begin{equation}
+		H(p,q) = -\sum_{x} p(x) \log_2 q(x) = H(p) + D_{\mathrm{KL}}(p \parallel q).
+	\end{equation}
+	Minimising cross-entropy is equivalent to minimising KL divergence from the true distribution.
+\end{definition}
+
+This is precisely the objective minimised during language model training. For a sequence $\mathbf{x} = (x_1, \dots, x_T)$, the per-token cross-entropy loss is
+\begin{equation}
+	\mathcal{L}_{\mathrm{NTP}} = -\frac{1}{T} \sum_{t=1}^{T} \log_2 p_\theta(x_t \mid x_{<t}),
+\end{equation}
+known as \emph{next-token prediction} (NTP).
+
+\begin{theorem}[Shannon's Source Coding Theorem]
+	For a stationary ergodic source with entropy rate $H$, the minimum expected code length per symbol achievable by any uniquely decodable code satisfies
+	\begin{equation}
+		H \leq L^* < H + 1.
+	\end{equation}
+\end{theorem}
+
+This theorem provides the fundamental limit: no language model can achieve a cross-entropy lower than the true entropy of the language. In practice, LLMs approach but never reach this limit, and the gap is precisely the KL divergence.
+
+\section{Kullback--Leibler Divergence}
+
+\begin{definition}[KL Divergence]
+	\begin{equation}
+		D_{\mathrm{KL}}(p \parallel q) = \sum_{x} p(x) \log \frac{p(x)}{q(x)} \geq 0,
+	\end{equation}
+	with equality iff $p = q$ almost everywhere.
+\end{definition}
+
+KL divergence appears throughout LLM theory:
+\begin{itemize}
+	\item \textbf{Training:} minimising cross-entropy is minimising KL divergence.
+	\item \textbf{Distillation:} student models are trained to minimise $D_{\mathrm{KL}}(p_\text{teacher} \parallel p_\text{student})$.
+	\item \textbf{RLHF:} the KL penalty term $\beta D_{\mathrm{KL}}(\pi_{\mathrm{RL}} \parallel \pi_{\mathrm{SFT}})$ prevents the policy from diverging too far from the supervised model.
+	\item \textbf{Beam search:} top-$k$ and top-$p$ sampling truncate the distribution, inducing controlled KL divergence.
+\end{itemize}
+
+\begin{theorem}[Gibbs' Inequality]
+	For any two probability distributions $p, q$ over the same discrete space,
+	\begin{equation}
+		D_{\mathrm{KL}}(p \parallel q) \geq 0,
+	\end{equation}
+	with equality if and only if $p = q$ almost everywhere.
+\end{theorem}
+
+\begin{proof}
+	By Jensen's inequality applied to the convex function $-\log$:
+	\begin{equation}
+		D_{\mathrm{KL}}(p \parallel q) = -\sum_x p(x) \log \frac{q(x)}{p(x)} \geq -\log \sum_x p(x) \frac{q(x)}{p(x)} = -\log 1 = 0.
+	\end{equation}
+\end{proof}
+
+\section{Mutual Information in Attention}
+
+\begin{definition}[Mutual Information]
+	\begin{equation}
+		I(X;Y) = D_{\mathrm{KL}}(p_{(X,Y)} \parallel p_X \otimes p_Y) = H(X) - H(X \mid Y).
+	\end{equation}
+	Mutual information measures the reduction in uncertainty about $X$ given $Y$.
+\end{definition}
+
+The attention mechanism computes a weighted sum of value vectors, where weights are given by a softmax over dot products:
+\begin{equation}
+	\alpha_{ij} = \frac{\exp(\mathbf{q}_i^\top \mathbf{k}_j / \sqrt{d_k})}{\sum_{j'} \exp(\mathbf{q}_i^\top \mathbf{k}_{j'} / \sqrt{d_k})}.
+\end{equation}
+
+This can be interpreted as a (normalised) pointwise mutual information between positions $i$ and $j$ in the latent space. The attention distribution $p(j \mid i)$ maximises the mutual information between the query position and the context positions under a soft constraint on the number of attended positions.
+
+\begin{theorem}[Data Processing Inequality]
+	If $X \to Y \to Z$ forms a Markov chain, then
+	\begin{equation}
+		I(X;Y) \geq I(X;Z).
+	\end{equation}
+\end{theorem}
+
+In transformer layers, this implies that information about the input is monotonically non-increasing as it propagates through layers, though the \emph{task-relevant} information may increase through the information bottleneck.
+
+\section{Rate--Distortion Theory and Quantisation}
+
+Quantisation of LLM weights can be viewed through rate--distortion theory.
+
+\begin{definition}[Rate--Distortion Function]
+	For a source $X$ and distortion measure $d$, the rate--distortion function is
+	\begin{equation}
+		R(D) = \min_{p(\hat{x} \mid x): \mathbb{E}[d(X,\hat{X})] \leq D} I(X; \hat{X}).
+	\end{equation}
+	$R(D)$ gives the minimum number of bits per symbol needed to reconstruct the source with average distortion at most $D$.
+\end{definition}
+
+Post-training quantisation (PTQ) maps each weight $w \in \mathbb{R}$ to $\hat{w} \in \{0, \dots, 2^b-1\}$, typically with a scale and zero-point:
+\begin{equation}
+	\hat{w} = \text{clamp}\left(\left\lfloor \frac{w}{\Delta} \right\rceil + z, 0, 2^b-1\right).
+\end{equation}
+The distortion $d(w,\hat{w}) = (w - \hat{w})^2$ induces a degradation $D$ in model perplexity. Rate--distortion theory tells us that for a given bit-width $b$, there is a fundamental trade-off between compression rate and model quality.
+
+\section{The Information Bottleneck and Hidden Representations}
+
+The information bottleneck (IB) principle (Tishby et al., 1999) provides a framework for understanding transformer hidden states. An LLM layer computes a representation $Z$ that should be:
+\begin{itemize}
+	\item \emph{Sufficient:} $I(Z; Y) \geq I(X; Y)$ (preserve task-relevant information).
+	\item \emph{Minimal:} minimise $I(Z; X)$ (compress away irrelevant details).
+\end{itemize}
+
+The IB Lagrangian is
+\begin{equation}
+	\mathcal{L}_{\mathrm{IB}} = I(Z; X) - \beta I(Z; Y).
+\end{equation}
+
+In transformers, each layer's hidden state $h_\ell$ can be seen as solving a successive IB trade-off, progressively filtering out task-irrelevant information while preserving predictive signal. This perspective explains why later layers are more task-specific and why pruning early layers often preserves performance.
+
+\section{The Entropy of Natural Language}
+
+Estimating the entropy of natural language is a longstanding problem:
+
+\begin{itemize}
+	\item \textbf{Shannon's game (1951):} humans guess the next letter; entropy $\approx 1.3$ bits/character.
+	\item \textbf{Cross-entropy of n-gram models:} $\sim 1.75$ bits/char (5-gram on Brown corpus).
+	\item \textbf{Neural language models:} GPT-2 achieves $\sim 1.0$ bits/char on WikiText-2.
+	\item \textbf{LLMs:} GPT-4 achieves $\sim 0.7$ bits/char on carefully curated benchmarks.
+\end{itemize}
+
+The gap between model cross-entropy and the true entropy of the language ($H_\text{true} \approx 0.6$--$1.0$ bits/char) represents the irreducible loss due to fundamental unpredictability in natural language.
+
+\section{Exercises}
+
+\begin{enumerate}
+	\item Prove that $H(p,q) \geq H(p)$ with equality iff $p = q$.
+	\item Show that the cross-entropy loss for next-token prediction is an unbiased estimator of $H(p, p_\theta)$ in the limit of infinite data.
+	\item For a quantised weight with $b$ bits, derive the expected MSE under uniform quantisation of a $\mathcal{N}(0, \sigma^2)$ distribution.
+	\item Compute $R(D)$ for a Gaussian source with squared-error distortion.
+	\item Explain why the KL penalty in RLHF prevents mode collapse.
+	\item Prove the data processing inequality for Markov chains.
+	\item Show that the IB Lagrangian can be rewritten as $\mathcal{L}_{\mathrm{IB}} = H(Y \mid Z) + \beta I(Z; X)$.
+\end{enumerate}
+
+% ============================================================
+\chapter{Computational Theory of Language Models}
+\label{ch:comp-theory}
+
+\epigraph{``Computation is the process of transforming information according to well-defined rules.''}{Alan Turing}
+
+This chapter examines LLMs through the lens of theoretical computer science: formal languages, computational complexity, and expressiveness.
+
+\section{The Autoregressive Paradigm}
+
+An autoregressive language model defines a distribution over sequences:
+\begin{equation}
+	p_\theta(x_1, \dots, x_T) = \prod_{t=1}^{T} p_\theta(x_t \mid x_{<t}).
+\end{equation}
+
+This is a \emph{generative} process: each token is sampled conditioned on all previous tokens. The computational cost is fundamentally sequential---generating token $t$ requires having generated all $t-1$ prior tokens.
+
+\begin{theorem}[Sequential Lower Bound]
+	Any exact autoregressive generation of a sequence of length $T$ requires at least $T$ sequential steps, regardless of parallel hardware.
+\end{theorem}
+
+\begin{proof}
+	By induction. The distribution of $x_t$ depends on $x_{<t}$. Without knowledge of $x_{t-1}$, the marginal $p(x_t \mid x_{<t-1})$ differs from $p(x_t \mid x_{<t})$ unless the model is provably Markov of order $t-2$, which is not the case for general LLMs.
+\end{proof}
+
+This bound motivates non-autoregressive and speculative decoding techniques, which trade exactness for parallelism.
+
+\section{Computational Complexity of Attention}
+
+Let $n$ be the sequence length and $d$ the hidden dimension.
+
+\begin{itemize}
+	\item \textbf{Self-attention:} $O(n^2 d)$ time, $O(n^2)$ memory for the attention matrix.
+	\item \textbf{Feed-forward:} $O(n d^2)$ time, $O(d^2)$ memory.
+	\item \textbf{Autoregressive generation (per step):} $O(n d)$ for attention with KV cache (incremental), $O(d^2)$ for FFN.
+\end{itemize}
+
+\begin{theorem}[Context Window as Memory]
+	The attention mechanism implements a content-addressable memory of size $O(n d)$. Retrieving information from a context of length $n$ requires $O(n)$ work, matching the lower bound for associative memory.
+\end{theorem}
+
+\begin{theorem}[Quadratic Lower Bound for Exact Attention]
+	Computing the full attention matrix $A = \text{softmax}(Q K^\top / \sqrt{d_k})$ requires $\Omega(n^2)$ operations in the worst case, as every pair of positions $(i, j)$ must contribute to the output.
+\end{theorem}
+
+This quadratic barrier is the primary motivation for sparse attention patterns, linear attention, and SSM alternatives.
+
+\section{Expressiveness: What Can Transformers Compute?}
+
+\begin{theorem}[Universal Approximation for Sequence-to-Sequence]
+	A transformer with sufficient width and depth can approximate any continuous sequence-to-sequence function on a compact domain, provided it has access to positional encodings.
+\end{theorem}
+
+\begin{theorem}[Turing Completeness]
+	Transformers with rational-valued activations and CoT (chain-of-thought) prompting are Turing-complete. A transformer with $O(\log n)$ layers and polynomial width can simulate a Turing machine for $n$ steps.
+\end{theorem}
+
+\begin{corollary}[CoT Increases Expressiveness]
+	There exist problems (e.g., evaluating Boolean formulas, solving linear equations) that cannot be solved by a constant-depth transformer without CoT but can be solved by the same transformer with $O(n)$ chain-of-thought steps.
+\end{corollary}
+
+\section{Circuit Complexity and TC0}
+
+The class $\mathsf{TC}^0$ consists of problems solvable by constant-depth, polynomial-size circuits with threshold (majority) gates. Transformers with no chain-of-thought are believed to be limited to problems in $\mathsf{TC}^0$:
+
+\begin{itemize}
+	\item $\mathsf{TC}^0$ includes: parity, addition, multiplication by constants, sorting.
+	\item $\mathsf{TC}^0$ does NOT include: multiplication of two $n$-bit numbers (requires $\mathsf{NC}^1$), matrix multiplication, or simulating a Turing machine for $n$ steps.
+	\item With CoT, transformers can simulate $\mathsf{P}$ (polynomial time) by using the token sequence as a tape.
+\end{itemize}
+
+\begin{theorem}[Transformer Hierarchy]
+	For a transformer with depth $L$, hidden dimension $d$, and precision $p$:
+	\begin{itemize}
+		\item Without CoT: computable functions lie in $\mathsf{TC}^0$ (for $L = O(1)$, $d = \text{poly}(n)$).
+		\item With $O(\log n)$ CoT steps: $\mathsf{NC}^1$.
+		\item With $\text{poly}(n)$ CoT steps: $\mathsf{P}$.
+	\end{itemize}
+\end{theorem}
+
+\section{RASP: A Programming Language for Transformers}
+
+RASP (Weiss et al., 2021) is a restricted programming language that captures the computational primitives of transformers:
+
+\begin{itemize}
+	\item \textbf{Selector operations:} attend from position $i$ to $j$ based on a predicate.
+	\item \textbf{Aggregate:} compute a softmax-weighted average of values.
+	\item \textbf{Sequence operations:} map, filter, reduce over positions.
+\end{itemize}
+
+Examples of RASP programs and their transformer realisations:
+\begin{itemize}
+	\item \textbf{Histogram:} count token frequencies in $O(1)$ layers.
+	\item \textbf{Flip:} reverse a sequence in $O(1)$ layers.
+	\item \textbf{dyck-1:} recognise balanced parentheses in $O(\log n)$ layers.
+	\item \textbf{Prefix sum:} compute running sums in $O(1)$ layers.
+\end{itemize}
+
+\section{Injective LLMs and Input Reconstruction}
+
+A recent line of work (arXiv:2510.15511) asks: can LLM-generated outputs be inverted to reconstruct the original input?
+
+\begin{definition}[Injective Language Model]
+	An LLM $p_\theta$ is injective if the mapping from input sequences to output distributions is one-to-one: different inputs always produce distinguishable output distributions.
+\end{definition}
+
+The SIPIT (Sampling-based Input Reconstruction) algorithm reconstructs the input prefix from generated tokens:
+
+\begin{algorithm}[SIPIT]
+	Given output tokens $y_1, \dots, y_m$, reconstruct input $x_1, \dots, x_n$ by:
+	\begin{enumerate}
+		\item Sampling multiple continuations from the model.
+		\item Identifying input tokens that maximise the likelihood of observed outputs.
+		\item Applying beam search over the input space.
+	\end{enumerate}
+\end{algorithm}
+
+Empirically, SIPIT reconstructs up to 60\% of input tokens exactly for GPT-2, showing that LLMs encode substantial information about their inputs in their outputs.
+
+\section{Formal Language Hierarchy}
+
+LLMs correspond to different levels of the Chomsky hierarchy:
+
+\begin{itemize}
+	\item \textbf{Regular languages:} exactly expressible by bounded-length $n$-gram models (Markovian). A transformer without positional encodings is bounded to regular languages.
+	\item \textbf{Context-free languages:} require stack-like memory; transformers with positional encodings can recognise some but not all CFLs. Dyck languages of depth $k$ require $\Omega(\log n)$ layers.
+	\item \textbf{Context-sensitive languages:} require $O(n)$ memory; transformers with sufficient layers can recognise some CSLs via chain-of-thought.
+	\item \textbf{Recursively enumerable:} Turing-complete with CoT.
+\end{itemize}
+
+\begin{theorem}[Separation by Depth]
+	For any $k$, there exists a formal language $L_k$ recognisable by a transformer of depth $k+1$ but not by any transformer of depth $k$ (with bounded precision).
+\end{theorem}
+
+\section{The Scaling Hypothesis}
+
+\begin{theorem}[Scaling Laws]
+	For a transformer trained on $D$ tokens with $N$ parameters, the cross-entropy loss scales as
+	\begin{equation}
+		L(N, D) = E + \frac{A}{N^\alpha} + \frac{B}{D^\beta},
+	\end{equation}
+	where $E$ is the irreducible entropy of the data, $A,B,\alpha,\beta$ are constants, and $\alpha \approx \beta \approx 0.5$ for typical architectures.
+\end{theorem}
+
+The optimal allocation under a fixed compute budget $C$ satisfies $N_\text{opt} \propto C^{0.5}$ and $D_\text{opt} \propto C^{0.5}$ (Chinchilla scaling), implying model size and data should be scaled equally.
+
+\begin{corollary}[Overtraining]
+	Training a model beyond the Chinchilla-optimal point (more tokens than optimal) yields diminishing returns: doubling tokens gives at most $2^{-\beta} \approx 70\%$ of the loss reduction of optimally allocated compute.
+\end{corollary}
+
+\section{Embedding Condensation}
+
+A recent finding (arXiv:2602.00217) shows that smaller models can ``condense'' the embedding geometry of larger models:
+
+\begin{theorem}[Embedding Condensation]
+	Training a smaller student model with a \emph{dispersion loss} $\mathcal{L}_{\text{disp}} = \|G_S - G_T\|_F^2$, where $G_S$ and $G_T$ are Gram matrices of hidden representations, transfers the geometric structure of the larger model's embedding space.
+\end{theorem}
+
+This suggests that the embedding geometry---the relative arrangement of token representations---carries substantial information that can be transferred across model scales.
+
+\section{Exercises}
+
+\begin{enumerate}
+	\item Prove that exact autoregressive generation is in $\mathsf{P}$ but each step depends on all previous outputs.
+	\item Show that the memory complexity of self-attention is $\Omega(n^2)$ for exact computation.
+	\item Argue why a transformer without positional encodings cannot recognise the language $a^n b^n$.
+	\item Derive the Chinchilla-optimal allocation from the scaling law equation.
+	\item Explain why chain-of-thought can increase effective depth.
+	\item Write a RASP program that computes the prefix sum of a binary sequence.
+	\item Show that $\mathsf{TC}^0 \subseteq \mathsf{NC}^1$ and argue why transformer limitations follow.
+\end{enumerate}
+
+% ============================================================
+% Part II: Architecture and Training
+% ============================================================
+\part{Architecture and Training}
+
+% ============================================================
+\chapter{Transformer Architecture}
+\label{ch:transformer}
+
+\epigraph{``Attention is all you need.''}{Vaswani et al., 2017}
+
+\section{The Transformer Block}
+
+Each transformer layer consists of two sub-layers:
+\begin{enumerate}
+	\item Multi-head self-attention (MHSA)
+	\item Feed-forward network (FFN), typically a gated MLP
+\end{enumerate}
+
+Each sub-layer employs a residual connection and layer normalisation:
+\begin{equation}
+	h' = \text{LayerNorm}(h + \text{SubLayer}(h)).
+\end{equation}
+
+\subsection{Pre-Norm vs. Post-Norm}
+
+The original transformer (Vaswani et al.) applied layer norm \emph{after} the residual addition (post-norm):
+\begin{equation}
+	h' = \text{LayerNorm}(h + \text{SubLayer}(h)).
+\end{equation}
+
+Modern LLMs (GPT-3, Llama, Mistral) apply layer norm \emph{before} each sub-layer (pre-norm):
+\begin{equation}
+	h' = h + \text{SubLayer}(\text{LayerNorm}(h)).
+\end{equation}
+
+Pre-norm provides more stable gradients at initialization, enabling training of deeper models without warmup instability.
+
+\subsection{RMSNorm}
+
+Llama and many subsequent models replace LayerNorm with RMSNorm:
+
+\begin{align}
+	\text{RMSNorm}(x)   & = \frac{x}{\sqrt{\frac{1}{d}\sum_{i=1}^d x_i^2}} \cdot \gamma,     \\
+	\text{LayerNorm}(x) & = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \cdot \gamma + \beta.
+\end{align}
+
+RMSNorm removes the mean-centering step, reducing computation by $O(d)$ per layer with negligible quality loss.
+
+\section{Masked Multi-Head Attention}
+
+In autoregressive decoding, each position can only attend to itself and earlier positions:
+\begin{equation}
+	\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^\top}{\sqrt{d_k}} + M\right)V,
+\end{equation}
+where $M$ is a causal mask: $M_{ij} = 0$ for $i \geq j$, $-\infty$ otherwise.
+
+Multi-head attention splits the computation into $h$ heads:
+\begin{equation}
+	\text{head}_i = \text{Attention}(QW_i^Q, KW_i^K, VW_i^V),
+\end{equation}
+\begin{equation}
+	\text{MHSA}(Q, K, V) = \text{Concat}(\text{head}_1, \dots, \text{head}_h) W^O.
+\end{equation}
+
+\section{Grouped Query Attention (GQA)}
+
+Modern LLMs (Llama 2/3, Mistral) use GQA where multiple query heads share a key-value head:
+\begin{equation}
+	n_{\text{kv}} = \frac{n_{\text{q}}}{g}, \quad g \geq 1.
+\end{equation}
+
+GQA reduces KV cache memory by a factor of $g$ with minimal quality loss. It interpolates between multi-head attention ($g=1$) and multi-query attention ($g = n_q$).
+
+\begin{theorem}[GQA Memory Savings]
+	For a model with $L$ layers, $n_{kv}$ KV heads, head dimension $d_h$, sequence length $t$, and precision $p$ bytes, the KV cache memory is:
+	\begin{equation}
+		M_{\text{KV}} = 2 \cdot L \cdot n_{kv} \cdot t \cdot d_h \cdot p.
+	\end{equation}
+	With GQA ratio $g$, this becomes $M_{\text{KV}} / g$ compared to full MHA.
+\end{theorem}
+
+\section{Feed-Forward Networks}
+
+The SwiGLU activation has become standard:
+\begin{equation}
+	\text{FFN}(x) = (W_1 x) \odot \sigma_{\text{SiLU}}(W_2 x) \cdot W_3,
+\end{equation}
+where $\sigma_{\text{SiLU}}(z) = z \cdot \sigma(z)$ is the SiLU/Swish activation, $\sigma$ is the logistic sigmoid, and $\odot$ denotes element-wise multiplication.
+
+Other GLU variants:
+\begin{itemize}
+	\item \textbf{ReGLU:} $(W_1 x) \odot \max(0, W_2 x) \cdot W_3$.
+	\item \textbf{GeGLU:} $(W_1 x) \odot \text{GELU}(W_2 x) \cdot W_3$.
+	\item \textbf{SwiGLU} (default in Llama, Mistral, GPT-4).
+\end{itemize}
+
+For a hidden dimension $d$ and intermediate dimension $d_{ff} = \frac{8}{3}d$, SwiGLU has three weight matrices vs. two in the standard ReLU FFN, adding $33\%$ more parameters.
+
+\section{RoPE: Rotary Positional Encodings}
+
+RoPE encodes position via a rotation matrix:
+\begin{equation}
+	R_{\Theta,m} = \bigoplus_{j=1}^{d/2} \begin{pmatrix}
+		\cos m\theta_j & -\sin m\theta_j \\
+		\sin m\theta_j & \cos m\theta_j
+	\end{pmatrix},
+\end{equation}
+where $\theta_j = 10000^{-2j/d}$.
+
+The dot product $q_m^\top k_n$ in RoPE depends only on the relative position $m-n$:
+\begin{equation}
+	q_m^\top k_n = (R_{\Theta,m} x_q)^\top (R_{\Theta,n} x_k) = x_q^\top R_{\Theta, m-n} x_k.
+\end{equation}
+
+This relative-position property enables length generalisation. The rotating frequency $\theta_j$ determines how quickly position information decays: lower dimensions rotate faster (capturing local positions), higher dimensions rotate slower (capturing long-range positions).
+
+\section{Attention Variants}
+
+\begin{itemize}
+	\item \textbf{ALiBi (Press et al., 2022):} adds a linear bias proportional to distance: $\text{softmax}(QK^\top / \sqrt{d} + m \cdot B)$ where $B_{ij} = -|i-j|$. No positional embeddings needed; extrapolates better to long sequences.
+	\item \textbf{Attention with Linear Biases (xPos):} combines RoPE with exponential decay for better length generalisation.
+	\item \textbf{Sparse attention:} only attend to local windows + global tokens (BigBird, Longformer).
+\end{itemize}
+
+\section{Exercises}
+
+\begin{enumerate}
+	\item Derive the FLOPs count per transformer layer.
+	\item Show that GQA with $g$ groups reduces KV cache memory by a factor of $g$.
+	\item Prove that RoPE makes attention depend only on relative position.
+	\item Implement a single masked attention head in pseudocode.
+	\item Compare pre-norm and post-norm in terms of gradient signal propagation.
+	\item Compute the parameter count of a SwiGLU FFN vs. a standard ReLU FFN for the same $d_{ff}$.
+\end{enumerate}
+
+% ============================================================
+\chapter{Tokenization}
+\label{ch:tokenization}
+
+\epigraph{``A tokenizer is a software stack, not a modelling choice.''}{Andrej Karpathy, 2023}
+
+Tokenization converts raw text into a sequence of integers (token IDs) that the model processes. Despite being a preprocessing step, tokenization choices profoundly affect model behaviour, vocabulary efficiency, and multilingual capability.
+
+\section{Byte-Pair Encoding (BPE)}
+
+BPE (Gage, 1994; Sennrich et al., 2016) is the dominant tokenization algorithm, used by GPT-2/3/4, Llama, and most modern LLMs.
+
+\begin{algorithm}[BPE Tokenizer Training]
+	\begin{enumerate}
+		\item Start with a vocabulary of individual bytes (or characters).
+		\item Count all adjacent pairs of tokens in the corpus.
+		\item Merge the most frequent pair into a new token.
+		\item Repeat step 2--3 until the desired vocabulary size is reached.
+	\end{enumerate}
+\end{algorithm}
+
+\begin{definition}[BPE Merge]
+	A BPE merge operation replaces every occurrence of the adjacent pair $(a, b)$ in the corpus with the new symbol $ab$. The merge is \emph{greedy}: once merged, the pair becomes an atomic unit for all subsequent merges.
+\end{definition}
+
+The BPE tokenizer for GPT-2 operates on bytes (Byte-Level BPE), ensuring that any Unicode string can be tokenized without unknown tokens. Before BPE, most tokenizers operated on characters or word-level, requiring large vocabularies for multilingual coverage.
+
+\begin{example}[BPE Merge Sequence]
+	For the corpus $\{\text{``low''}, \text{``lower''}, \text{``lowest''}\}$:
+	\begin{enumerate}
+		\item Initial: \{\texttt{l}, \texttt{o}, \texttt{w}, \texttt{e}, \texttt{r}, \texttt{s}, \texttt{t}\}
+		\item Merges: \texttt{l+o $\to$ lo}, \texttt{w+e $\to$ we}, \texttt{lo+w $\to$ low}, \texttt{we+r $\to$ wer}, \texttt{low+e $\to$ lowe}, \texttt{lowe+r $\to$ lower}, \texttt{low+e $\to$ lowe}, \texttt{low+s $\to$ lows}, \texttt{lowe+s $\to$ lowes}, \texttt{lowes+t $\to$ lowest}
+	\end{enumerate}
+	The final vocabulary size depends on the merge count limit.
+\end{example}
+
+\section{SentencePiece}
+
+SentencePiece (Kudo \& Richardson, 2018) treats tokenization as a segmentation problem without needing pre-tokenized words (whitespace is handled as a regular symbol $\_$). It supports two algorithms:
+
+\subsection{BPE Mode}
+
+Same merge-based algorithm as BPE, but operating on the raw Unicode byte stream rather than pre-tokenized words. Whitespace is preserved as the underscore character.
+
+\subsection{Unigram Language Model Mode}
+
+\begin{algorithm}[Unigram LM Tokenization]
+	\begin{enumerate}
+		\item Start with a large seed vocabulary (all characters + frequent substrings).
+		\item Define $p(x) = \sum_{s \in S(x)} p(s)$, where $S(x)$ is the set of segmentations of $x$.
+		\item Optimise vocabulary by removing tokens that reduce likelihood the least.
+		\item Repeat until the desired vocabulary size is reached.
+	\end{enumerate}
+\end{algorithm}
+
+The unigram model defines the probability of a tokenisation as:
+\begin{equation}
+	p(\mathbf{x}) = \prod_{i=1}^n p(t_i), \quad \text{where } t_i \text{ are the tokens}.
+\end{equation}
+
+Training maximises the marginal likelihood $p(\text{corpus}) = \prod_{x \in \text{corpus}} \sum_{S \in \text{seg}(x)} \prod_{t \in S} p(t)$, which is computed efficiently via the forward--backward algorithm.
+
+\section{tiktoken}
+
+tiktoken is OpenAI's fast BPE tokenizer, implemented in Rust with Python bindings. It provides several encoding schemes:
+
+\begin{itemize}
+	\item \texttt{r50k\_base}: GPT-3 (50K vocabulary, code and text).
+	\item \texttt{cl100k\_base}: GPT-3.5 and GPT-4 (100K vocabulary, extended multilingual and code support).
+	\item \texttt{o200k\_base}: GPT-4o (200K vocabulary, significantly expanded multilingual and emoji coverage).
+\end{itemize}
+
+\begin{theorem}[Vocab Size Evolution]
+	The progression of tokenizer vocabulary sizes reflects the need for:
+	\begin{itemize}
+		\item \textbf{50K (GPT-3, 2020):} sufficient for English-dominant text.
+		\item \textbf{100K (GPT-3.5/4, 2023):} better multilingual coverage and code efficiency.
+		\item \textbf{200K (GPT-4o, 2024):} broad multilingual parity and reduced token/byte ratio for CJK languages.
+	\end{itemize}
+\end{theorem}
+
+\section{WordPiece}
+
+WordPiece, used in BERT and its variants, differs from BPE in its merge criterion:
+
+\begin{algorithm}[WordPiece Merge Criterion]
+	Instead of merging the most frequent pair, WordPiece merges the pair $(a, b)$ that maximises the likelihood increase:
+	\begin{equation}
+		\Delta \mathcal{L} = \log \frac{p(b \mid a)}{p(b)} = \log \frac{\text{count}(a,b)}{\text{count}(a)\text{count}(b)}.
+	\end{equation}
+	This prefers pairs whose co-occurrence is higher than expected by chance.
+\end{algorithm}
+
+\section{Vocabulary Size Trade-offs}
+
+\begin{longtable}{p{3cm}p{4cm}p{4cm}p{4cm}}
+	\toprule
+	\textbf{Vocab Size} & \textbf{Advantages}          & \textbf{Disadvantages}         & \textbf{Examples}   \\
+	\midrule
+	32K (small)         & Small embedding matrix, fast & High OOV rate, poor multiling. & Llama 1/2           \\
+	50K (medium)        & Balanced for English         & CJK tokenisation inefficient   & GPT-3, GPT-2        \\
+	100K (large)        & Better multilingual          & Larger embedding layer         & GPT-3.5/4, Llama 3  \\
+	128K (large)        & Good coverage                & 25\%+ of params in embeddings  & Llama 3             \\
+	200K (XL)           & Minimal OOV                  & Very large embedding           & GPT-4o, o200k\_base \\
+	\bottomrule
+\end{longtable}
+
+For a vocabulary size $V$ and hidden dimension $d$, the embedding matrix has $V \cdot d$ parameters. At $V = 128K$ and $d = 8192$, the embedding accounts for over 1B parameters---a significant fraction of an 8B model.
+
+\section{Multilingual Tokenization and CJK}
+
+Languages with large character sets (Chinese, Japanese, Korean) expose weaknesses in BPE:
+
+\begin{itemize}
+	\item English text averages $\sim 1.3$ tokens/word.
+	\item Chinese text averages $\sim 2.5$--$3.5$ tokens/character due to UTF-8 byte decomposition.
+	\item A Chinese character (e.g., the character for ``middle'') is split into multiple bytes before BPE merging.
+	\item Llama 3's 128K vocabulary was specifically designed to improve CJK efficiency.
+	\item GPT-4o's 200K vocabulary dramatically reduces CJK token/byte ratios.
+\end{itemize}
+
+\begin{definition}[Token-to-Byte Ratio]
+	The token-to-byte ratio measures tokenization efficiency:
+	\begin{equation}
+		\rho = \frac{\text{number of tokens}}{\text{number of bytes}}.
+	\end{equation}
+	Lower $\rho$ means more efficient encoding. For English, $\rho \approx 0.25$ (GPT-4), for Chinese, $\rho \approx 0.6$--$1.0$ depending on vocabulary size.
+\end{definition}
+
+\section{Digit Tokenization and Arithmetic Failures}
+
+BPE tokenization of numbers causes systematic arithmetic failures:
+
+\begin{itemize}
+	\item The number ``15213'' may be tokenized as [``15'', ``213''] or [``1'', ``5213''] depending on context.
+	\item Arithmetic operations that should be consistent across digit representations become non-compositional.
+	\item The model must learn arithmetic independently for each digit substring, rather than leveraging place-value structure.
+	\item Switching to per-digit tokenization (``1'', ``5'', ``2'', ``1'', ``3'') resolves many arithmetic failures but increases sequence length.
+\end{itemize}
+
+This is a known limitation: BPE merges frequent digit pairs (like ``00'' or ``99''), destroying the place-value structure that makes arithmetic systematic.
+
+\section{Special Tokens}
+
+Tokenizers reserve special tokens for structural control:
+
+\begin{itemize}
+	\item \texttt{<|begin\_of\_text|>} / \texttt{<|end\_of\_text|>}: sequence boundaries.
+	\item \texttt{<|pad|>}: padding for batch processing.
+	\item \texttt{<|unk|>}: unknown token (rare in byte-level tokenizers).
+	\item \texttt{<|im\_start|>}, \texttt{<|im\_end|>}: chat message delimiters.
+	\item \texttt{<|tool\_call|>}: structured tool invocation markers.
+	\item \texttt{<|reserved|>}: reserved for task-specific tokens (e.g., special tokens for function calling in GPT-4).
+\end{itemize}
+
+The design of special tokens has become increasingly important for structured output generation and agentic workflows.
+
+\section{Formal Semantics of BPE}
+
+Recent work (arXiv:2309.08715) formalises BPE tokenization semantics:
+
+\begin{theorem}[BPE Determinism]
+	Byte-level BPE with a fixed merge table defines a deterministic tokenization of any string, provided no merge creates a token absent from the vocabulary.
+\end{theorem}
+
+\begin{theorem}[BPE Non-Monotonicity]
+	BPE tokenization is not monotonic: adding a merge can change the tokenization of strings that did not contain the merged pair, because merges interact through shared prefixes and suffixes.
+\end{theorem}
+
+This non-monotonicity means that tokenization decisions are globally interdependent---merges cannot be applied independently.
+
+\section{The Tokenizer Wars (2023--2024)}
+
+The importance of tokenizer design became a debated topic:
+
+\begin{itemize}
+	\item Some argued that tokenizer choice is as important as model architecture (and that GPT-4o's quality improvements partly stem from its better tokenizer).
+	\item Others countered that scaling the vocabulary is a straightforward engineering optimization, not a research breakthrough.
+	\item The release of GPT-4o's \texttt{o200k\_base} encoding showed clear improvements in multilingual token/byte ratios, suggesting that prior tokenizers were suboptimal for non-English languages.
+\end{itemize}
+
+The consensus emerging by 2025: tokenizer quality matters, especially for multilingual performance and code generation, but it is a necessary baseline consideration rather than a differentiating research contribution.
+
+\section{Exercises}
+
+\begin{enumerate}
+	\item Implement BPE merge training on a small corpus of 100 sentences.
+	\item Compare the tokenization efficiency of GPT-2's 50K tokenizer vs. GPT-4o's 200K tokenizer on a Chinese Wikipedia article.
+	\item Show that BPE digit tokenization makes arithmetic non-compositional.
+	\item Compute the embedding parameter count for $V=128K$, $d=8192$.
+	\item Write pseudocode for the SentencePiece unigram LM training loop.
+	\item Explain why WordPiece's merge criterion differs from BPE's.
+\end{enumerate}
+
+% ============================================================
+\chapter{Mixture of Experts}
+\label{ch:moe}
+
+\epigraph{``Sparsity is the ultimate regularizer.''}{Anonymous}
+
+Mixture-of-Experts (MoE) layers replace dense FFN layers with multiple ``expert'' sub-networks, routing each token to a subset of experts. This decouples model capacity (total parameters) from computational cost (FLOPs per token).
+
+\section{Top-$k$ Routing}
+
+\begin{definition}[MoE Layer]
+	An MoE layer consists of $E$ expert networks $f_1, \dots, f_E$ and a router $g$:
+	\begin{equation}
+		y = \sum_{i=1}^E g(x)_i \cdot f_i(x),
+	\end{equation}
+	where $g(x) \in \mathbb{R}^E$ is a sparse gating vector.
+\end{definition}
+
+\begin{definition}[Top-$k$ Routing]
+	The router computes a score for each expert and activates only the top $k$:
+	\begin{equation}
+		g(x) = \text{softmax}\left(\text{TopK}\left(W_g x + \epsilon, k\right)\right),
+	\end{equation}
+	where $\text{TopK}(v, k)_i = v_i$ if $v_i$ is in the $k$ largest values, and $-\infty$ otherwise.
+	Typically $k = 2$ for a balance of capacity and computational efficiency.
+\end{definition}
+
+The computational cost of an MoE layer with $E$ experts, top-$k$ routing, and hidden dimension $d$ is $k/E$ of the cost of a dense layer with $E \cdot d$ hidden units, while retaining $E \times$ the parameters.
+
+\section{Token Choice vs. Expert Choice Routing}
+
+\begin{itemize}
+	\item \textbf{Token Choice Routing (TCR):} each token selects its top-$k$ experts. Simple and widely used (Switch Transformer, Mixtral). May cause load imbalance.
+	\item \textbf{Expert Choice Routing (ECR):} each expert selects its top-$k$ tokens. Guarantees perfect load balance. Used in M6-T and later V-MoE (Vision MoE).
+\end{itemize}
+
+ECR addresses a fundamental flaw of TCR: under TCR, tokens may all select the same expert (catastrophic load imbalance), while other experts receive no tokens.
+
+\begin{theorem}[ECR Load Balance Guarantee]
+	With Expert Choice Routing and $T = k \cdot E$ tokens, each expert processes exactly $k$ tokens per layer, providing deterministic load balance.
+\end{theorem}
+
+\section{Load Balancing Loss}
+
+To prevent the router from collapsing to a few experts, an auxiliary load balancing loss is added:
+
+\begin{equation}
+	\mathcal{L}_{\text{bal}} = \alpha \cdot E \cdot \sum_{i=1}^E \left( \frac{1}{T} \sum_{t=1}^T \mathbbm{1}\{\text{token } t \text{ routed to expert } i\} \right) \cdot \left( \frac{1}{T} \sum_{t=1}^T g(x_t)_i \right).
+\end{equation}
+
+This minimises the product of the fraction of tokens assigned to each expert and the average routing probability. When both are uniform ($1/E$), the loss is minimal.
+
+\begin{remark}
+	The load balancing loss trades off between routing quality (which may favour imbalanced routing) and computational efficiency (which requires balanced routing). The coefficient $\alpha$ controls this trade-off, typically set to $0.01$.
+\end{remark}
+
+\section{Fine-Grained Experts: DeepSeekMoE}
+
+DeepSeekMoE (DeepSeek, 2024) introduces fine-grained expert splitting:
+
+\begin{itemize}
+	\item \textbf{Shared experts:} $E_s$ experts are always activated for every token.
+	\item \textbf{Routed experts:} each token activates $k$ of $E_r$ routed experts via top-$k$.
+\end{itemize}
+
+The output is:
+\begin{equation}
+	y = \sum_{i=1}^{E_s} f_i^{\text{(shared)}}(x) + \sum_{i=1}^{E_r} g(x)_i \cdot f_i^{\text{(routed)}}(x).
+\end{equation}
+
+\begin{theorem}[Fine-Grained Expert Advantage]
+	Splitting a single expert into multiple smaller experts and routing to more of them (e.g., $E=8, k=2$ vs. $E=64, k=8$) improves the knowledge-capacity trade-off: each token accesses more specialised knowledge for the same computational cost.
+\end{theorem}
+
+DeepSeek-V2 uses $E_s = 2$ shared experts and $E_r = 160$ routed experts with $k = 6$, achieving $1/\text{th}$ the inference cost of a comparable dense model.
+
+\section{Expert Parallelism}
+
+\begin{definition}[Expert Parallelism]
+	Each expert is placed on a specific GPU (or GPU group). Tokens are routed to the GPU hosting their selected expert via all-to-all communication:
+	\begin{equation}
+		T_{\text{comm}} = T_{\text{all-to-all}}(B \cdot d \cdot E),
+	\end{equation}
+	where $B$ is the batch size and $d$ the hidden dimension.
+\end{definition}
+
+Expert parallelism introduces communication overhead: tokens must be sent to the GPU holding their expert, processed, and returned. This can become a bottleneck for small batch sizes.
+
+\section{Grouped GEMM for MoE}
+
+Standard MoE implementations process experts independently, launching $E$ separate matrix multiplications. Grouped GEMM fuses these into one kernel:
+
+\begin{itemize}
+	\item Tokens for all experts are packed into a contiguous input tensor.
+	\item A single grouped GEMM kernel dispatches each token to its expert's weight matrix.
+	\item Eliminates $E-1$ kernel launch overheads.
+	\item Requires expert weight matrices arranged as $[\text{expert}, \text{hidden}, \text{intermediate}]$.
+\end{itemize}
+
+\begin{theorem}[Grouped GEMM Speedup]
+	For $E$ experts and batch $B$, grouped GEMM achieves speedup:
+	\begin{equation}
+		S = \frac{E \cdot (T_{\text{kernel}} + T_{\text{launch}})}{T_{\text{kernel}} + E \cdot T_{\text{launch}}} \approx E \quad \text{for small batches}.
+	\end{equation}
+\end{theorem}
+
+\section{PathMoE}
+
+PathMoE (arXiv:2604.17837) introduces \emph{block-shared routers} to improve routing consistency:
+
+\begin{itemize}
+	\item Each MoE layer has a shared router $g_{\text{shared}}$ and per-expert routers $g_i$.
+	\item The routing decision decomposes into a \emph{control signal} (which expert type) and a \emph{content channel} (which specific knowledge).
+	\item Output: $y = g_{\text{shared}}(x) \cdot \sum_i g_i(x) \cdot f_i(x)$.
+\end{itemize}
+
+\begin{theorem}[Routing Decomposition]
+	PathMoE achieves 79\% routing consistency across similar inputs, compared to $\sim 30\%$ for standard top-$k$ routing. The control signal captures the broad skill type, while the content channel specialises within that skill.
+\end{theorem}
+
+\section{Polysemantic Experts vs. Monosemantic Paths}
+
+An important finding about MoE interpretability:
+
+\begin{itemize}
+	\item \textbf{Polysemantic experts:} individual experts activate for multiple unrelated concepts (e.g., the same expert handles both code syntax and mathematical notation).
+	\item \textbf{Monosemantic paths:} the \emph{combination} of which experts are activated forms a sparse code that is more interpretable.
+\end{itemize}
+
+\begin{theorem}[Expert Superposition]
+	In large MoE models, individual experts are polysemantic (they activate for multiple unrelated inputs), but the routing vector $g(x) \in \mathbb{R}^E$ acts as a sparse code that disentangles features. The effective dimensionality of the representation grows with $E$ even though each token activates only $k$ experts.
+\end{theorem}
+
+\section{Major MoE Models}
+
+\begin{longtable}{p{3cm}p{2.5cm}p{2.5cm}p{2.5cm}p{3cm}}
+	\toprule
+	\textbf{Model}      & \textbf{Experts} & \textbf{Top-$k$} & \textbf{Active params} & \textbf{Notable feature}                        \\
+	\midrule
+	Switch Transformer  & 2048             & 1                & $\sim 7$B              & First large-scale MoE LLM, instability at $k=1$ \\
+	GShard              & 2048             & 2                & $\sim 7$B              & Load balancing via capacity factor              \\
+	Mixtral 8$\times$7B & 8                & 2                & 12.9B / 47B total      & First popular open MoE                          \\
+	DeepSeek-V2         & 160 + 2 shared   & 6                & 21B / 236B total       & Fine-grained + shared experts                   \\
+	Qwen1.5-MoE         & 64               & 8                & 2.7B / 14.3B total     & $k/E$ ratio $= 1/8$                             \\
+	DBRX                & 16               & 4                & 36B / 132B total       & Fine-tuned for code                             \\
+	\bottomrule
+\end{longtable}
+
+\section{Exercises}
+
+\begin{enumerate}
+	\item Derive the FLOPs comparison between a dense FFN and an MoE FFN with $E$ experts and top-$k$ routing.
+	\item Show that Expert Choice Routing guarantees perfect load balance.
+	\item Compute the communication volume for expert parallelism with batch $B$, hidden $d$, and $E$ experts.
+	\item Explain why the load balancing loss uses the product of assignment fraction and routing probability.
+	\item Compare the active-to-total parameter ratio across Mixtral, DeepSeek-V2, and DBRX.
+	\item Argue why routing consistency matters for model interpretability.
+\end{enumerate}
+
+% ============================================================
+\chapter{Training and Scaling Laws}
+\label{ch:training}
+
+\section{The Three-Stage Pipeline}
+
+Modern LLM training follows a three-stage process:
+
+\begin{enumerate}
+	\item \textbf{Pre-training:} Next-token prediction on trillions of tokens. Objective:
+	      \begin{equation}
+		      \mathcal{L}_{\text{pretrain}} = -\frac{1}{|\mathcal{D}|} \sum_{x \in \mathcal{D}} \sum_{t} \log p_\theta(x_t \mid x_{<t}).
+	      \end{equation}
+	\item \textbf{Supervised fine-tuning (SFT):} Maximise likelihood of instruction--response pairs:
+	      \begin{equation}
+		      \mathcal{L}_{\text{SFT}} = -\frac{1}{|\mathcal{D}_{\text{SFT}}|} \sum_{(x,y) \in \mathcal{D}_{\text{SFT}}} \log p_\theta(y \mid x).
+	      \end{equation}
+	\item \textbf{Reinforcement learning from human feedback (RLHF):} Optimise a reward model using the PPO objective with KL penalty:
+	      \begin{equation}
+		      \mathcal{L}_{\text{RLHF}} = \mathbb{E}_{(x,y) \sim \pi_\theta} [r(x,y)] - \beta D_{\mathrm{KL}}(\pi_\theta \parallel \pi_{\text{SFT}}).
+	      \end{equation}
+\end{enumerate}
+
+\section{Scaling Laws in Practice}
+
+The Kaplan et al. (2020) scaling laws establish power-law relationships:
+\begin{align}
+	L(N) & = \left(\frac{N_c}{N}\right)^{\alpha_N} + L_\infty, \\
+	L(D) & = \left(\frac{D_c}{D}\right)^{\alpha_D} + L_\infty,
+\end{align}
+where $\alpha_N \approx 0.076$, $\alpha_D \approx 0.103$ for typical transformer architectures.
+
+\begin{definition}[Chinchilla Optimality]
+	A model is Chinchilla-optimal when, for a given compute budget $C$, the loss $L(N, D)$ is minimised. The optimal allocation satisfies:
+	\begin{equation}
+		\frac{\partial L}{\partial N} \cdot \frac{dN}{dC} = \frac{\partial L}{\partial D} \cdot \frac{dD}{dC}.
+	\end{equation}
+	For the standard scaling law, this yields $N_\text{opt} \propto C^{0.5}$, $D_\text{opt} \propto C^{0.5}$.
+\end{definition}
+
+\begin{example}[Compute-Optimal Allocation]
+	For a 70B model, Chinchilla-optimal training uses $\sim 1.4$T tokens (20 tokens per parameter). Llama 3 70B was trained on 15T tokens, making it ``overtrained'' relative to Chinchilla---a deliberate choice to maximise downstream performance.
+\end{example}
+
+\section{Learning Rate Schedules}
+
+\begin{definition}[Cosine Decay]
+	\begin{equation}
+		\eta(t) = \eta_{\min} + \frac{1}{2}(\eta_{\max} - \eta_{\min})\left(1 + \cos\left(\frac{t}{T}\pi\right)\right),
+	\end{equation}
+	where $T$ is the total number of training steps, $\eta_{\max}$ is the peak learning rate, and $\eta_{\min}$ is the final learning rate.
+\end{definition}
+
+Modern practice (Llama 3, GPT-4):
+\begin{itemize}
+	\item \textbf{Warmup:} linear increase from $0$ to $\eta_{\max}$ over $2$--$5\%$ of steps.
+	\item \textbf{Cosine decay:} from $\eta_{\max}$ to $\eta_{\max} \cdot 0.1$ over the remaining steps.
+	\item \textbf{Peak LR:} $3\times 10^{-4}$ for 7B, $1.5\times 10^{-4}$ for 70B (inverse sqrt scaling with model size).
+\end{itemize}
+
+\section{Distributed Training Strategies}
+
+\begin{itemize}
+	\item \textbf{Data parallelism:} each GPU holds a full model replica, processes different micro-batches; gradients are all-reduced.
+	\item \textbf{Tensor parallelism:} each GPU holds a slice of each layer; forward/backward passes require all-reduce on attention and FFN outputs.
+	\item \textbf{Pipeline parallelism:} layers are partitioned across GPUs; micro-batches are pipelined through stages. Bubble overhead is $(P-1)/(P \cdot M)$.
+	\item \textbf{ZeRO optimisation:} partitions optimizer states, gradients, and parameters across GPUs, reducing memory per GPU.
+\end{itemize}
+
+\subsection{Precision and Numerics}
+
+\begin{itemize}
+	\item \textbf{FP32:} master weights, loss scaling, normalisation.
+	\item \textbf{BF16:} forward/backward pass, gradients. Larger exponent range than FP16 (no overflow for large gradients).
+	\item \textbf{FP8 training (H100):} 8-bit floating point for matrix multiplications. Requires higher-precision accumulation and careful scaling.
+	\item \textbf{Mixed precision:} FP32 master weights updated with FP16/BF16 gradients; loss scaling prevents underflow.
+\end{itemize}
+
+\section{Exercises}
+
+\begin{enumerate}
+	\item Compute the total FLOPs for training a 7B-parameter model on 2T tokens.
+	\item Show that LoRA fine-tuning updates $\Delta W = BA$ where $B \in \mathbb{R}^{d \times r}$, $A \in \mathbb{R}^{r \times k}$ with $r \ll d,k$.
+	\item Derive the memory savings of ZeRO Stage 3 over standard data parallelism.
+	\item Compute the Chinchilla-optimal data budget for a 13B model.
+	\item Explain why cosine decay outperforms step decay for LLM pre-training.
+\end{enumerate}
+
+% ============================================================
+\chapter{Post-Training and Alignment}
+\label{ch:alignment}
+
+\epigraph{``Alignment is not a phase, it's a discipline.''}{Anonymous}
+
+Post-training converts a pre-trained base model into a helpful, harmless, and honest assistant. This chapter covers the major alignment techniques.
+
+\section{Supervised Fine-Tuning (SFT)}
+
+The simplest post-training method: fine-tune on high-quality instruction-response pairs.
+
+\begin{equation}
+	\mathcal{L}_{\text{SFT}} = -\mathbb{E}_{(x,y) \sim \mathcal{D}_{\text{SFT}}}\left[\sum_{t} \log \pi_\theta(y_t \mid x, y_{<t})\right].
+\end{equation}
+
+SFT teaches the model to follow instructions and adopt a desired interaction format. It does not, however, teach the model to refuse harmful requests or to express uncertainty---these require RL-based methods.
+
+\section{The RLHF Framework}
+
+Reinforcement Learning from Human Feedback (RLHF) consists of three phases:
+
+\begin{enumerate}
+	\item \textbf{SFT:} initialise the policy $\pi_{\text{SFT}}$ from the pre-trained base model.
+	\item \textbf{Reward modelling:} train $r_\phi(x, y)$ to predict human preferences:
+	      \begin{equation}
+		      \mathcal{L}_{\text{RM}} = -\mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}_{\text{RM}}}\left[\log \sigma(r_\phi(x, y_w) - r_\phi(x, y_l))\right].
+	      \end{equation}
+	\item \textbf{Policy optimisation:} maximise reward with KL penalty:
+	      \begin{equation}
+		      \max_{\pi_\theta} \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_\theta(\cdot \mid x)}\left[r_\phi(x, y)\right] - \beta D_{\mathrm{KL}}(\pi_\theta \parallel \pi_{\text{SFT}}).
+	      \end{equation}
+\end{enumerate}
+
+\section{PPO (Proximal Policy Optimization)}
+
+PPO (Schulman et al., 2017) is the workhorse of RLHF:
+
+\begin{algorithm}[PPO-RLHF]
+	For each iteration:
+	\begin{enumerate}
+		\item Sample trajectories $y \sim \pi_\theta(\cdot \mid x)$.
+		\item Compute advantages: $A_t = \sum_{t'=t}^T \gamma^{t'-t} r_{t'} - V_\psi(x, y_{<t})$.
+		\item Clipped surrogate objective:
+		      \begin{equation}
+			      \mathcal{L}_{\text{PPO}} = \mathbb{E}\left[\min\left(\frac{\pi_\theta(y_t \mid \dots)}{\pi_{\text{old}}(y_t \mid \dots)} A_t,\ \text{clip}\left(\frac{\pi_\theta}{\pi_{\text{old}}}, 1-\epsilon, 1+\epsilon\right) A_t\right)\right].
+		      \end{equation}
+		\item Update value function $V_\psi$ via MSE on returns.
+		\item Add KL penalty: $\mathcal{L} = \mathcal{L}_{\text{PPO}} - \beta D_{\mathrm{KL}}(\pi_\theta \parallel \pi_{\text{SFT}})$.
+	\end{enumerate}
+\end{algorithm}
+
+The critic network $V_\psi$ estimates the value function (expected return from a state), reducing variance in the policy gradient estimate.
+
+\section{DPO (Direct Preference Optimization)}
+
+DPO (Rafailov et al., 2023) eliminates the reward model and critic, optimising the policy directly from preferences:
+
+\begin{equation}
+	\mathcal{L}_{\text{DPO}} = -\mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}}\left[\log \sigma\left(\beta \log \frac{\pi_\theta(y_w \mid x)}{\pi_{\text{SFT}}(y_w \mid x)} - \beta \log \frac{\pi_\theta(y_l \mid x)}{\pi_{\text{SFT}}(y_l \mid x)}\right)\right].
+\end{equation}
+
+\begin{theorem}[DPO Equivalence to RLHF]
+	DPO is equivalent to RLHF under the Bradley-Terry preference model: the optimal policy $\pi^*$ under the KL-constrained reward maximisation objective is identical to the policy obtained by DPO, up to the choice of $\beta$.
+\end{theorem}
+
+\begin{proof}[Sketch]
+	The RLHF objective $\max_{\pi} \mathbb{E}[r(x,y)] - \beta D_{\mathrm{KL}}(\pi \parallel \pi_{\text{SFT}})$ has closed-form solution:
+	\begin{equation}
+		\pi^*(y \mid x) = \frac{1}{Z(x)} \pi_{\text{SFT}}(y \mid x) \exp\left(\frac{1}{\beta} r(x, y)\right).
+	\end{equation}
+	Solving for $r$ and substituting into the Bradley-Terry preference probability yields the DPO loss.
+\end{proof}
+
+\subsection{Likelihood Displacement Failure}
+
+Recent work (Razin et al., 2024) identifies a failure mode of DPO:
+
+\begin{theorem}[Likelihood Displacement]
+	DPO can cause the policy to assign high probability to both preferred and dispreferred responses simultaneously, because the loss only penalises the \emph{ratio} of probabilities, not their absolute values. This ``likelihood displacement'' degrades calibration.
+\end{theorem}
+
+\section{GRPO (Group Relative Policy Optimization)}
+
+GRPO, used by DeepSeek-R1, eliminates the critic network entirely:
+
+\begin{algorithm}[GRPO]
+	For each prompt $x$:
+	\begin{enumerate}
+		\item Sample $G$ responses $\{y_1, \dots, y_G\} \sim \pi_\theta(\cdot \mid x)$.
+		\item Compute group-relative advantage:
+		      \begin{equation}
+			      A_i = \frac{r(x, y_i) - \mu_r}{\sigma_r},
+		      \end{equation}
+		      where $\mu_r = \frac{1}{G}\sum_j r(x, y_j)$, $\sigma_r = \text{std}(\{r(x, y_j)\})$.
+		\item Policy gradient update (no critic):
+		      \begin{equation}
+			      \nabla_\theta \mathcal{L}_{\text{GRPO}} = \mathbb{E}\left[ \frac{1}{G}\sum_{i=1}^G \sum_{t=1}^{|y_i|} \nabla_\theta \log \pi_\theta(y_{i,t} \mid \dots) A_i - \beta \nabla_\theta D_{\mathrm{KL}}(\pi_\theta \parallel \pi_{\text{SFT}}) \right].
+		      \end{equation}
+	\end{enumerate}
+\end{algorithm}
+
+\begin{remark}
+	GRPO replaces the learned value function with a Monte Carlo baseline computed from the group. This removes the critic network (halving memory during RL training) but introduces variance from finite group samples.
+\end{remark}
+
+\subsection{KL in the Loss vs. KL in the Reward}
+
+GRPO places the KL penalty inside the loss rather than inside the reward:
+\begin{itemize}
+	\item \textbf{KL in reward:} $r'(x,y) = r(x,y) - \beta D_{\mathrm{KL}}(\pi_\theta \parallel \pi_{\text{SFT}})$. Used by PPO.
+	\item \textbf{KL in loss:} $\mathcal{L} = \mathcal{L}_{\text{policy}} - \beta D_{\mathrm{KL}}(\pi_\theta \parallel \pi_{\text{SFT}})$. Used by GRPO, KTO.
+\end{itemize}
+
+When KL is in the loss, the KL penalty differentiates through the policy output, providing direct gradient signal to stay close to the reference model.
+
+\section{RLVR (Reinforcement Learning from Verifiable Rewards)}
+
+RLVR replaces the learned reward model with a rule-based verifier:
+
+\begin{definition}[Rule-Based Verifier]
+	For problems with objectively correct answers (math, code), the verifier $v(x, y)$ returns $1$ for correct and $0$ for incorrect, based on:
+	\begin{itemize}
+		\item \textbf{Math:} comparing the final numerical answer.
+		\item \textbf{Code:} executing the generated code against test cases.
+		\item \textbf{Logic:} checking formal constraints.
+	\end{itemize}
+\end{definition}
+
+RLVR applies any policy gradient method (PPO, GRPO) with $r(x,y) = v(x,y)$:
+
+\begin{equation}
+	\max_{\pi_\theta} \mathbb{E}_{(x,y) \sim \pi_\theta}[v(x,y)] - \beta D_{\mathrm{KL}}(\pi_\theta \parallel \pi_{\text{SFT}}).
+\end{equation}
+
+\begin{remark}
+	RLVR avoids reward hacking and reward model bias. DeepSeek-R1 uses RLVR for math and code, achieving significant reasoning improvements without human preference labels.
+\end{remark}
+
+\section{Comparison of RL Methods}
+
+\begin{longtable}{p{2.5cm}p{3cm}p{3cm}p{3cm}p{3cm}}
+	\toprule
+	\textbf{Property} & \textbf{PPO}      & \textbf{DPO}            & \textbf{GRPO}   & \textbf{RLVR}       \\
+	\midrule
+	Reward model      & Required          & Not needed              & Required        & Rule-based          \\
+	Critic network    & Required          & Not needed              & Not needed      & Optional            \\
+	Online sampling   & Yes               & No (offline)            & Yes             & Yes                 \\
+	Memory (vs. SFT)  & $2\times$         & $1\times$               & $1.5\times$     & $1\text{--}2\times$ \\
+	Gradient bias     & Low               & Likelihood displacement & Group-dependent & Verifier-dependent  \\
+	KL placement      & Reward            & Implicit                & Loss            & Reward or loss      \\
+	Best for          & General alignment & Simple preference       & Reasoning tasks & Math/code           \\
+	Used by           & GPT-4, Claude     & Llama 3, Zephyr         & DeepSeek-R1     & DeepSeek-R1, Qwen   \\
+	\bottomrule
+\end{longtable}
+
+\section{Other Alignment Methods}
+
+\begin{itemize}
+	\item \textbf{KTO (Kahneman-Tversky Optimisation):} uses only binary feedback (good/bad) rather than pairwise preferences. Loss derived from prospect theory.
+	\item \textbf{SimPO (Simple Preference Optimization):} replaces the reference model with sequence-level likelihood, simplifying the DPO objective.
+	\item \textbf{IPO (Identity Preference Optimization):} an alternative to DPO that avoids the log-ratio formulation and provides stronger guarantees against overfitting.
+	\item \textbf{ORPO (Odds Ratio Preference Optimization):} combines SFT and preference optimisation into a single loss without a separate reference model.
+\end{itemize}
+
+\subsection{K1 vs. K3 KL Estimators}
+
+The KL divergence in RLHF can be estimated with different sample sizes:
+\begin{itemize}
+	\item \textbf{K1 estimator (per-token):} $\hat{D}_{\mathrm{KL}}^{(1)} = \log \frac{\pi_\theta(y_t \mid \dots)}{\pi_{\text{SFT}}(y_t \mid \dots)}$. Low variance, biased per-token.
+	\item \textbf{K3 estimator (per-sequence):} $\hat{D}_{\mathrm{KL}}^{(3)} = \sum_t \log \frac{\pi_\theta(y_t \mid \dots)}{\pi_{\text{SFT}}(y_t \mid \dots)}$. Unbiased per-sequence, higher variance.
+\end{itemize}
+
+When KL is placed in the reward function, K1 is preferred because it provides a per-token KL penalty without introducing sequence-level noise. When KL is in the loss, K3 provides an unbiased estimate.
+
+\section{Exercises}
+
+\begin{enumerate}
+	\item Derive the closed-form optimal policy for the KL-constrained RLHF objective.
+	\item Show that DPO's loss function is equivalent to the RLHF objective under Bradley-Terry preferences.
+	\item Compare the memory requirements of PPO vs. DPO training for a 7B model.
+	\item Explain why GRPO does not need a critic network.
+	\item Simulate likelihood displacement in DPO with a synthetic preference dataset.
+	\item Design a rule-based verifier for a multi-step math word problem.
+\end{enumerate}
+
+% ============================================================
+% Part III: Beyond Transformers
+% ============================================================
+\part{Beyond Transformers}
+
+% ============================================================
+\chapter{State Space Models and Alternative Architectures}
+\label{ch:ssm}
+
+\epigraph{``The quadratic cost of attention is not a law of nature; it is a design choice.''}{Anonymous}
+
+The $O(n^2)$ scaling of attention motivates alternative architectures that achieve linear or sub-quadratic complexity while maintaining expressiveness.
+
+\section{From RNNs to Structured State Spaces}
+
+Recurrent neural networks (RNNs) process sequences in $O(n)$ time but suffer from vanishing gradients and limited memory. State space models (SSMs) reformulate recurrence as a continuous-time dynamical system:
+
+\begin{equation}
+	h'(t) = A h(t) + B x(t), \quad y(t) = C h(t) + D x(t),
+\end{equation}
+where $A \in \mathbb{R}^{d \times d}$ is the state transition matrix, $B \in \mathbb{R}^{d \times 1}$ the input projection, $C \in \mathbb{R}^{1 \times d}$ the output projection, and $D$ a skip connection.
+
+\section{S4: Structured State Space Sequence Model}
+
+S4 (Gu et al., 2022) introduces a structured parametrisation of $A$:
+
+\begin{definition}[HiPPO Matrix]
+	The HiPPO (High-Order Polynomial Projection Operators) matrix is:
+	\begin{equation}
+		A_{nk} = -\sqrt{(2n+1)(2k+1)} \cdot \begin{cases}
+			1   & \text{if } n > k, \\
+			n+1 & \text{if } n = k, \\
+			0   & \text{if } n < k.
+		\end{cases}
+	\end{equation}
+	This matrix stores a compressed representation of the input history as coefficients of orthogonal polynomials.
+\end{definition}
+
+S4 exploits the HiPPO matrix's normal-plus-low-rank (NPLR) structure to diagonalise the recurrence, achieving $O(n)$ computation during training via convolution.
+
+\begin{theorem}[S4 Computational Complexity]
+	S4 processes a sequence of length $n$ in $O(n)$ time and $O(n)$ memory for training, and $O(1)$ per step for generation.
+\end{theorem}
+
+\section{H3: Leveraging SSMs for Language}
+
+H3 (Hungry Hungry Hippo; Fu et al., 2023) extends S4 by adding multiplicative gates inspired by attention:
+
+\begin{itemize}
+	\item Two SSMs in series with a gating mechanism.
+	\item The first SSM produces a query-like signal; the second produces a key-like signal.
+	\item Element-wise multiplication of the two SSM outputs creates a content-based interaction.
+\end{itemize}
+
+H3 achieves competitive results with transformers on language modelling while maintaining linear complexity.
+
+\section{Mamba: S6 Selective SSM}
+
+Mamba (Gu \& Dao, 2023) introduces the S6 layer, which makes the SSM parameters input-dependent:
+
+\begin{equation}
+	B_t = \text{Linear}_B(x_t), \quad C_t = \text{Linear}_C(x_t), \quad \Delta_t = \text{softplus}(\text{Linear}_\Delta(x_t)).
+\end{equation}
+
+\begin{definition}[Selectivity]
+	A model is \emph{selective} if its state-space dynamics depend on the input content, not just position. This enables content-aware recall (e.g., ``ignore filler tokens, remember the key entity''), which was impossible in LTI SSMs.
+\end{definition}
+
+Selectivity breaks the convolution equivalence: Mamba cannot be computed via convolution because $B_t$ and $C_t$ vary per token. Instead, Mamba uses a hardware-aware parallel scan:
+
+\begin{algorithm}[Mamba Parallel Scan]
+	\begin{enumerate}
+		\item Compute $\bar{A}_t = \exp(\Delta_t \cdot A)$, $\bar{B}_t = \Delta_t \cdot B_t$.
+		\item Scan recurrence: $h_t = \bar{A}_t h_{t-1} + \bar{B}_t x_t$.
+		\item Parallelise via associative scan: the recurrence $(h_t, \bar{A}_t, \bar{B}_t x_t)$ forms a semigroup under composition.
+		\item Compute $y_t = C_t h_t$.
+	\end{enumerate}
+\end{algorithm}
+
+The parallel scan runs in $O(\log n)$ steps on $O(n)$ processors, achieving practical speedups over attention for long sequences.
+
+\section{Mamba-2: SSD Reformulation}
+
+Mamba-2 (Dao \& Gu, 2024) reformulates the SSM as a structured state-space duality (SSD):
+
+\begin{theorem}[SSD = Attention + SSM]
+	The Mamba-2 layer computes:
+	\begin{equation}
+		y = (L \circ S) \cdot v,
+	\end{equation}
+	where $L$ is a causal mask (lower-triangular), $S = Q K^\top$ is a structured semi-separable matrix, and $\circ$ denotes element-wise multiplication.
+\end{theorem}
+
+This reveals that Mamba-2's SSM is a \emph{linear attention} variant with a structured kernel. Key innovations:
+\begin{itemize}
+	\item \textbf{Multi-head SSM:} multiple independent SSM heads, matching attention's multi-head structure.
+	\item \textbf{Head dimension:} $d_{\text{head}} = 64$ or 128, matching typical attention configurations.
+	\item \textbf{State dimension:} $N = 64$--$256$ per head, larger than Mamba-1's $N=16$.
+\end{itemize}
+
+The SSD formulation enables efficient training via matrix multiplication ($O(n^2)$ on GPU, matching attention), while retaining $O(1)$ per-step generation.
+
+\section{Mamba-3: Complex States and MIMO}
+
+Mamba-3 (2025) introduces three major advances:
+
+\begin{itemize}
+	\item \textbf{Exponential-trapezoidal discretisation:} higher-order integration of the continuous SSM reduces approximation error.
+	\item \textbf{Complex-valued states:} $A \in \mathbb{C}^{d \times d}$ with complex eigenvalues enables oscillatory dynamics and richer temporal patterns.
+	\item \textbf{MIMO (multi-input multi-output):} each SSM processes multiple input and output channels simultaneously, increasing expressiveness per parameter.
+\end{itemize}
+
+\begin{theorem}[Mamba-3 Expressiveness]
+	With complex-valued states, Mamba-3 can represent any linear dynamical system of dimension $2d$, whereas real-valued Mamba-2 requires $2d$ real dimensions.
+\end{theorem}
+
+\section{Hybrid Architectures}
+
+Several models combine SSMs with attention for the best of both worlds:
+
+\begin{itemize}
+	\item \textbf{Jamba (AI21, 2024):} interleaves Mamba layers with attention layers and MoE FFNs. Attention layers handle long-range recall; Mamba layers handle efficient local processing.
+	\item \textbf{TransMamba:} shares query/key/value projections between the attention and SSM paths, using a cross-block residual (CBx) connection. Params: 91\% shared, 9\% unique.
+	\item \textbf{RWKV:} linear attention reformulated as a recurrent neural network with a time-dependent decay factor. $O(n)$ training via WKV computation.
+	\item \textbf{RetNet (Sun et al., 2023):} retention mechanism with three computation modes---parallel (training), recurrent (generation), chunkwise (efficient decoding).
+\end{itemize}
+
+\section{MoE-SSM Hybrids}
+
+\begin{itemize}
+	\item \textbf{Swimba (2025):} replaces FFN experts in MoE with SSM experts. The router selects which SSM to apply per token. Single-pass recurrence (no KV cache) enables extreme throughput.
+	\item \textbf{Nemotron-H (NVIDIA, 2025):} hybrid MoE with both attention and SSM experts, using hardware-aware scheduling to balance workload across experts.
+\end{itemize}
+
+\section{Comparison with Transformers}
+
+\begin{longtable}{p{3cm}p{3cm}p{3cm}p{3cm}}
+	\toprule
+	\textbf{Property}       & \textbf{Transformer} & \textbf{Mamba-2}    & \textbf{Jamba}  \\
+	\midrule
+	Training complexity     & $O(n^2 d)$           & $O(n d N)$          & Mixed           \\
+	Generation complexity   & $O(n d)$ per step    & $O(1)$ per step     & $O(1)$ per step \\
+	Memory (long context)   & $O(n^2)$             & $O(n d)$            & $O(n d)$        \\
+	Content-based recall    & Yes (attention)      & Yes (selective)     & Yes             \\
+	Long-range dependencies & Unlimited            & State-limited ($N$) & Hybrid          \\
+	Throughput (long seq.)  & Degrades             & Stable              & Near-stable     \\
+	\bottomrule
+\end{longtable}
+
+\section{Exercises}
+
+\begin{enumerate}
+	\item Show that S4 can be computed via convolution when $A$, $B$, $C$ are time-invariant.
+	\item Derive the associative scan for the Mamba recurrence $h_t = \bar{A}_t h_{t-1} + \bar{B}_t x_t$.
+	\item Explain why selectivity breaks the convolution equivalence in Mamba.
+	\item Prove that the SSD formulation in Mamba-2 is equivalent to linear attention with a structured kernel.
+	\item Compare the generation-time memory of a transformer (KV cache) vs.\ Mamba (state vector).
+	\item Design a hybrid architecture that interleaves 1 attention layer every 4 Mamba layers. Justify the ratio.
+\end{enumerate}
+
+% ============================================================
+% Part IV: Inference
+% ============================================================
+\part{Inference}
+
+% ============================================================
+\chapter{Autoregressive Inference}
+\label{ch:inference}
+
+\section{Decoding Strategies}
+
+\begin{definition}[Greedy Decoding]
+	At each step $t$, select
+	\begin{equation}
+		x_t^* = \arg\max_{x \in \mathcal{V}} p_\theta(x \mid x_{<t}).
+	\end{equation}
+	Greedy decoding is deterministic but may miss high-probability continuations due to locally optimal choices.
+\end{definition}
+
+\begin{definition}[Beam Search]
+	Maintain a set $\mathcal{B}_t$ of $k$ partial hypotheses. At each step, expand each hypothesis with the top-$k$ tokens and retain the $k$ highest-scoring sequences:
+	\begin{equation}
+		\mathcal{B}_{t+1} = \text{top-}k \left( \bigcup_{y \in \mathcal{B}_t} \bigcup_{x \in \mathcal{V}} \{(y, x)\} \text{ with score } \log p_\theta(y, x) \right).
+	\end{equation}
+\end{definition}
+
+\begin{definition}[Top-$k$ Sampling]
+	Sample from the $k$ highest-probability tokens:
+	\begin{equation}
+		p'(x \mid x_{<t}) = \begin{cases}
+			p(x \mid x_{<t}) / \sum_{i=1}^k p_{(i)} & \text{if } x \in \mathcal{V}^{(k)}, \\
+			0                                       & \text{otherwise},
+		\end{cases}
+	\end{equation}
+	where $\mathcal{V}^{(k)}$ is the set of $k$ tokens with highest probability.
+\end{definition}
+
+\begin{definition}[Top-$p$ (Nucleus) Sampling]
+	Sample from the smallest set $\mathcal{V}^{(p)}$ such that
+	\begin{equation}
+		\sum_{x \in \mathcal{V}^{(p)}} p(x \mid x_{<t}) \geq p.
+	\end{equation}
+	Nucleus sampling adaptively truncates the tail of the distribution.
+\end{definition}
+
+\section{Temperature Sampling}
+
+Temperature $\tau$ rescales the logits before the softmax:
+\begin{equation}
+	p_\tau(x \mid x_{<t}) = \frac{\exp(\ell_t / \tau)}{\sum_{x'} \exp(\ell_{x'} / \tau)}.
+\end{equation}
+
+As $\tau \to 0$, sampling approaches greedy decoding. As $\tau \to \infty$, sampling approaches uniform.
+
+\begin{theorem}[Temperature and Entropy]
+	The entropy of the temperature-scaled distribution satisfies:
+	\begin{equation}
+		H(p_\tau) = \log|\mathcal{V}| - \frac{1}{\tau} \sum_x p(x) \log p(x) + O(\tau^{-2}) \quad \text{as } \tau \to \infty.
+	\end{equation}
+	Lower temperatures concentrate probability mass, reducing diversity.
+\end{theorem}
+
+\section{The KV Cache}
+
+During autoregressive generation, the key and value tensors for all previous tokens are cached to avoid recomputation:
+\begin{align}
+	K_{\leq t} & = [K_{\leq t-1}; K_t] \in \mathbb{R}^{t \times d_k}, \\
+	V_{\leq t} & = [V_{\leq t-1}; V_t] \in \mathbb{R}^{t \times d_v}.
+\end{align}
+
+The KV cache has memory cost:
+\begin{equation}
+	M_{\text{KV}} = 2 \cdot L \cdot n_{kv} \cdot t \cdot d_h \cdot p \quad \text{bytes}.
+\end{equation}
+
+For a 70B model with $t = 4096$, $L=80$, $n_{kv}=8$, $d_h=128$, $p=2$ (FP16): $M \approx 1.34$ GB per sequence.
+
+\section{Parallel Decoding}
+
+Several techniques generate multiple tokens per step:
+
+\begin{itemize}
+	\item \textbf{Medusa (Cai et al., 2024):} add $k$ parallel heads that predict the next $k$ tokens simultaneously. Each head predicts one future position. Use tree attention to process all hypotheses.
+	\item \textbf{Lookahead Decoding (Fu et al., 2024):} use Jacobi iteration to generate $k$ tokens per step. Each step, the model predicts all $k$ positions based on current guesses, then updates.
+	\item \textbf{Eagle (Li et al., 2024):} a lightweight draft model predicts future tokens using both the current hidden state and previously predicted tokens.
+\end{itemize}
+
+These methods achieve 2--4$\times$ speedup in wall-clock time at the cost of increased FLOPs.
+
+\section{Exercises}
+
+\begin{enumerate}
+	\item Compare greedy decoding and beam search on a sequence where the locally optimal choice leads to a dead end.
+	\item Compute the KV cache memory for Llama 3 70B at $t = 8192$.
+	\item Show that temperature $\tau = 1$ recovers the original distribution.
+	\item Design a Medusa head architecture for 4-token lookahead.
+	\item Explain why nucleus sampling is preferred over top-$k$ for diverse generation.
+\end{enumerate}
+
+% ============================================================
+\chapter{Inference Optimisation}
+\label{ch:inference-opt}
+
+\section{Quantisation}
+
+\begin{definition}[Uniform Quantisation]
+	Map a weight $w \in [\alpha, \beta]$ to $b$-bits:
+	\begin{equation}
+		\hat{w} = \Delta \cdot \text{clamp}\left(\left\lfloor \frac{w - \alpha}{\Delta} \right\rceil, 0, 2^b - 1\right) + \alpha,
+	\end{equation}
+	where $\Delta = (\beta - \alpha) / (2^b - 1)$.
+\end{definition}
+
+\subsection{GPTQ}
+
+Optimal Brain Quantiser (Frantar et al., 2023): iteratively quantise weights while compensating the remainder using the inverse Hessian:
+\begin{equation}
+	\delta w_q = -\frac{w_q}{\text{diag}(H_{qq}^{-1})} \cdot H_{:,q}^{-1},
+\end{equation}
+where $H = 2XX^\top$ is the Hessian of the MSE loss.
+
+\subsection{AWQ}
+
+Activation-aware weight quantisation (Lin et al., 2023): scale salient weights (those corresponding to large activations) before quantisation to preserve outlier channels:
+\begin{equation}
+	\tilde{w} = w \cdot s, \quad \text{Quantise}(\tilde{w}), \quad \hat{w} = \text{Dequantise}(\hat{\tilde{w}}) \cdot s^{-1}.
+\end{equation}
+The per-channel scale $s$ is chosen to minimise MSE under a small calibration set.
+
+\subsection{GGUF and NF4}
+
+For CPU inference, llama.cpp uses the GGUF format with various quantisation levels:
+\begin{itemize}
+	\item \textbf{GGUF Q4\_K\_M:} 4-bit quantisation with importance-based mixed precision (some weights get 5 or 6 bits).
+	\item \textbf{NF4 (QLoRA):} normalised float 4-bit, where quantisation levels match a standard normal distribution: $\text{NF4} = \{ -1.0, -0.85, -0.7, \dots, 0.85, 1.0 \}$.
+\end{itemize}
+
+\subsection{FP8 Inference (H100)}
+
+The H100 GPU supports FP8 matrix multiplication natively:
+\begin{itemize}
+	\item E4M3 (4 exponent bits, 3 mantissa): range $\pm 448$, fine-grained for weights.
+	\item E5M2 (5 exponent bits, 2 mantissa): wider range $\pm 57344$, coarser granularity, suitable for activations.
+	\item FP8 inference achieves 2$\times$ throughput vs. FP16 with minimal quality loss ($< 0.5\%$ perplexity increase).
+\end{itemize}
+
+\section{Speculative Decoding}
+
+Speculative decoding (Leviathan et al., 2022; Chen et al., 2023) accelerates generation by using a small draft model $M_q$ to propose $K$ tokens, which are then verified by the target model $M_p$ in parallel.
+
+\begin{algorithm}[Speculative Decoding]
+	\begin{enumerate}
+		\item Draft model $M_q$ generates $K$ tokens autoregressively: $x_{t+1}, \dots, x_{t+K} \sim M_q(\cdot \mid x_{\leq t})$.
+		\item Target model $M_p$ computes logits for all $K+1$ prefixes in parallel.
+		\item For each position $i = 1, \dots, K$, accept $x_{t+i}$ with probability $\min(1, p(x_{t+i}) / q(x_{t+i}))$.
+		\item Reject at the first rejection; resample from the residual distribution $\propto \max(0, p - q)$.
+	\end{enumerate}
+\end{algorithm}
+
+The expected speedup is:
+\begin{equation}
+	\mathbb{E}[\text{speedup}] = \frac{\sum_{k=1}^K k \cdot P(\text{accept } k)}{\text{latency overhead}}.
+\end{equation}
+
+\begin{theorem}[Acceptance Rate]
+	The expected number of accepted tokens is:
+	\begin{equation}
+		\mathbb{E}[K_{\text{acc}}] = \sum_{k=1}^K P(\text{accept } k) = \sum_{k=1}^K \prod_{i=1}^k \min\left(1, \frac{p(x_{t+i})}{q(x_{t+i})}\right).
+	\end{equation}
+	When $M_q \approx M_p$, $\mathbb{E}[K_{\text{acc}}] \approx K$.
+\end{theorem}
+
+\section{Flash Attention}
+
+Flash Attention (Dao et al., 2022) computes exact attention without materialising the $N \times N$ matrix, using tiling and recomputation:
+
+\begin{enumerate}
+	\item Tile $Q$, $K$, $V$ into blocks that fit in SRAM.
+	\item For each block, compute the partial softmax and update the output incrementally using online softmax.
+	\item Recompute the attention matrix during the backward pass (instead of storing it) to trade FLOPs for memory bandwidth.
+\end{enumerate}
+
+This reduces memory from $O(N^2)$ to $O(N)$ and achieves 2--4$\times$ speedup on GPUs.
+
+\begin{theorem}[Flash Attention IO Complexity]
+	Flash Attention achieves $O(N^2 d^2 / M)$ HBM accesses, where $M$ is the SRAM size, compared to $O(N^2 d + N d^2)$ for standard attention. For $M = 108$KB (A100), this is a $5$--$10\times$ reduction in HBM traffic.
+\end{theorem}
+
+\section{Continuous Batching and PagedAttention}
+
+\begin{itemize}
+	\item \textbf{Continuous batching:} instead of waiting for all sequences in a batch to complete, new sequences are admitted as soon as existing ones finish. This maximises GPU utilisation.
+	\item \textbf{PagedAttention (vLLM):} KV cache blocks are stored in non-contiguous physical memory pages, managed like virtual memory. This eliminates internal fragmentation and enables copy-on-write for parallel sampling.
+\end{itemize}
+
+\section{Exercises}
+
+\begin{enumerate}
+	\item Show that 4-bit quantisation compresses model weights by a factor of $8\times$ relative to FP16.
+	\item Derive the expected speedup of speculative decoding when the acceptance rate is $\alpha$.
+	\item Explain why Flash Attention reduces memory from $O(N^2)$ to $O(N)$.
+	\item Compare continuous batching with static batching in terms of throughput and latency.
+	\item Compute the FP8 memory savings for a 70B model vs. FP16.
+	\item Show that NF4 quantisation preserves the expected value of standard-normal-distributed weights.
+\end{enumerate}
+
+% ============================================================
+\chapter{Long-Context Techniques}
+\label{ch:long-context}
+
+\epigraph{``Context length is not a ceiling, it is a floor.''}{Anonymous}
+
+Standard RoPE has limited ability to generalise beyond the training sequence length. This chapter covers techniques to extend the context window of pre-trained LLMs.
+
+\section{Position Interpolation (PI)}
+
+PI (Chen et al., 2023) rescales position indices to fit within the trained range:
+
+\begin{equation}
+	\theta'_j = \theta_j \cdot \frac{L_{\text{train}}}{L_{\text{target}}},
+\end{equation}
+where $L_{\text{train}}$ is the training context length and $L_{\text{target}}$ is the desired length.
+
+\begin{definition}[Position Interpolation]
+	For a target length $L > L_{\text{train}}$, the position $m$ is mapped to $m' = m \cdot (L_{\text{train}} / L)$. All RoPE frequencies remain the same but positions are compressed.
+\end{definition}
+
+PI requires fine-tuning on the extended length but causes resolution loss for nearby tokens.
+
+\section{NTK-Aware Scaling}
+
+NTK-aware scaling (bloc97, 2023) scales high-frequency components less and low-frequency components more, motivated by the Neural Tangent Kernel:
+
+\begin{equation}
+	\theta'_j = \theta_j \cdot \alpha^{2j/d},
+\end{equation}
+where $\alpha = (L_{\text{target}} / L_{\text{train}})^{d/(d-2)}$.
+
+\begin{remark}
+	NTK-aware scaling preserves high-frequency information (local token interactions) while extending the range of low-frequency components (long-range dependencies). It requires minimal or no fine-tuning.
+\end{remark}
+
+\section{YaRN (Yet another RoPE extensioN)}
+
+YaRN (Peng et al., 2023) combines PI and NTK-aware scaling with a ramp function:
+
+\begin{align}
+	\theta'_j       & =
+	\begin{cases}
+		\theta_j \cdot s    & \text{if } j < r \text{ (low freq.)},      \\
+		\theta_j            & \text{if } j > r + w \text{ (high freq.)}, \\
+		\text{interpolated} & \text{otherwise},
+	\end{cases} \\
+	\text{where } s & = \frac{L_{\text{target}}}{L_{\text{train}}}.
+\end{align}
+
+Key parameters:
+\begin{itemize}
+	\item \textbf{Ramp length $w$:} width of the transition region (typically $w = 8$).
+	\item \textbf{Ramp start $r$:} dimension below which full interpolation is applied.
+	\item \textbf{Temperature factor $t$:} rescales attention logits: $t = \sqrt{\log(L_{\text{target}} / L_{\text{train}})}$.
+\end{itemize}
+
+\begin{theorem}[YaRN Frequency Groups]
+	YaRN partitions dimensions into three groups:
+	\begin{enumerate}
+		\item \textbf{High-frequency:} $j > r + w$, keep original $\theta_j$ (no interpolation).
+		\item \textbf{Low-frequency:} $j < r$, apply full position interpolation.
+		\item \textbf{Ramp region:} $r \leq j \leq r + w$, smoothly transition between the two.
+	\end{enumerate}
+	This preserves local information while extending range.
+\end{theorem}
+
+\section{Dynamic NTK}
+
+Dynamic NTK applies NTK-aware scaling at inference time without fine-tuning:
+\begin{equation}
+	\alpha = \max\left(1, \frac{L_{\text{current}}}{L_{\text{train}}}\right),
+\end{equation}
+where $L_{\text{current}}$ is the actual sequence length at each inference step. The scaling factor changes dynamically as generation progresses.
+
+\section{LongRoPE}
+
+LongRoPE (2024) uses evolutionary search to find per-dimension position interpolation factors:
+
+\begin{equation}
+	\theta_j' = \frac{\theta_j}{s_j},
+\end{equation}
+where $s_j$ is the per-dimension scale, found via:
+\begin{equation}
+	\min_{s_1, \dots, s_{d/2}} \text{PPL}(\text{model with scales } s_j),
+	\quad \text{s.t. } s_j \text{ monotonically non-decreasing in } j.
+\end{equation}
+
+\begin{definition}[Monotonic Constraint]
+	The scale factors $s_j$ must be monotonically non-decreasing: $s_1 \leq s_2 \leq \dots \leq s_{d/2}$. This ensures that lower-frequency dimensions (larger $j$) are interpolated more, consistent with the NTK intuition.
+\end{definition}
+
+LongRoPE extends context to 256K with minimal perplexity degradation and no fine-tuning beyond a small calibration set.
+
+\section{LongRoPE2}
+
+LongRoPE2 (2025) refines the evolutionary search with a needle-driven objective:
+
+\begin{equation}
+	\min_{s} \text{PPL}_{\text{needle}}(s) = \text{PPL}(\text{needle-in-haystack with scales } s).
+\end{equation}
+
+Instead of perplexity on long documents, LongRoPE2 optimises for the needle-in-haystack retrieval success rate, directly targeting the use case that long-context models must support.
+
+\section{AlphaRoPE}
+
+AlphaRoPE uses power-function scaling as a compromise between PI and NTK:
+
+\begin{equation}
+	\theta_j' = \theta_j \cdot \left(\frac{L_{\text{target}}}{L_{\text{train}}}\right)^{\alpha_j},
+	\quad \alpha_j = 1 - \frac{2j}{d}.
+\end{equation}
+
+High-frequency dimensions ($j \approx 0$) get $\alpha_j \approx 1$ (full PI scaling), while low-frequency dimensions ($j \approx d/2$) get $\alpha_j \approx 0$ (no scaling). This smooth interpolation avoids the hard ramp boundary of YaRN.
+
+\section{CoPE (Contextual Position Encoding)}
+
+CoPE (2025) applies soft clipping to low-frequency components:
+
+\begin{equation}
+	\theta_j' = \theta_j \cdot \text{clip}\left(\frac{L_{\text{target}}}{L_{\text{train}}}, 1, \tau_j\right),
+\end{equation}
+where $\tau_j$ is a per-dimension clipping threshold learned or defined as $\tau_j = 1 + (c-1) \cdot \frac{2j}{d}$.
+
+CoPE achieves $2\times$ perplexity improvement over PI on long-context benchmarks without fine-tuning.
+
+\section{RoPE Out-of-Distribution Theory}
+
+Recent theoretical work unifies these techniques:
+
+\begin{theorem}[RoPE OOD Decomposition]
+	The OOD error from length extrapolation decomposes into:
+	\begin{equation}
+		\mathcal{E}_{\text{ext}} = \mathcal{E}_{\text{freq}} + \mathcal{E}_{\text{pos}} + \mathcal{E}_{\text{atten}},
+	\end{equation}
+	where:
+	\begin{itemize}
+		\item $\mathcal{E}_{\text{freq}}$: frequency mismatch between trained and novel positions.
+		\item $\mathcal{E}_{\text{pos}}$: absolute position encoding drift beyond trained range.
+		\item $\mathcal{E}_{\text{atten}}$: attention entropy collapse at unseen positions.
+	\end{itemize}
+	NTK-aware scaling reduces $\mathcal{E}_{\text{freq}}$, YaRN's temperature factor reduces $\mathcal{E}_{\text{atten}}$, and LongRoPE's per-dimension scales reduce $\mathcal{E}_{\text{pos}}$.
+\end{theorem}
+
+\section{Comparison}
+
+\begin{longtable}{p{3cm}p{3cm}p{3cm}p{3cm}p{2.5cm}}
+	\toprule
+	\textbf{Method} & \textbf{Max length}         & \textbf{Fine-tune needed?} & \textbf{Key idea}    & \textbf{PPL @ 128K} \\
+	\midrule
+	None            & $L_{\text{train}}$          & No                         & --                   & Degrades            \\
+	PI              & $2\times L_{\text{train}}$  & Yes                        & Linear rescaling     & $+1.5$              \\
+	NTK-aware       & $4\times L_{\text{train}}$  & No                         & Frequency-dependent  & $+0.8$              \\
+	YaRN            & $16\times L_{\text{train}}$ & No                         & Ramp + temperature   & $+0.3$              \\
+	Dynamic NTK     & $8\times L_{\text{train}}$  & No                         & Evolving scale       & $+0.6$              \\
+	LongRoPE        & $32\times L_{\text{train}}$ & Minimal                    & Per-dimension search & $+0.1$              \\
+	AlphaRoPE       & $16\times L_{\text{train}}$ & No                         & Power-function       & $+0.4$              \\
+	CoPE            & $16\times L_{\text{train}}$ & No                         & Soft clipping        & $+0.2$              \\
+	\bottomrule
+\end{longtable}
+
+\section{Exercises}
+
+\begin{enumerate}
+	\item Derive the position interpolation formula for RoPE.
+	\item Explain why NTK-aware scaling preserves high-frequency components.
+	\item Implement the YaRN ramp function in pseudocode.
+	\item Show that LongRoPE's monotonic constraint is consistent with NTK intuition.
+	\item Compare the fine-tuning requirements of PI vs. YaRN vs. LongRoPE.
+	\item Propose a new RoPE extension method combining AlphaRoPE and CoPE.
+\end{enumerate}
+
+% ============================================================
+% Part V: Engineering
+% ============================================================
+\part{Engineering}
+
+% ============================================================
+\chapter{GPU Architecture for LLMs}
+\label{ch:gpu}
+
+\section{GPU Memory Hierarchy}
+
+Modern GPUs (NVIDIA Hopper, Ada Lovelace) have a hierarchical memory system:
+
+\begin{itemize}
+	\item \textbf{Global memory (HBM3/HBM2e):} 40--144\,GB, bandwidth 2--3.35\,TB/s. High latency ($\sim$600 cycles).
+	\item \textbf{L2 cache:} 40--60\,MB on-chip. Shared across SMs.
+	\item \textbf{Shared memory / SRAM:} 128--256\,KB per SM. Low latency ($\sim$20 cycles), explicitly managed.
+	\item \textbf{Registers:} 65536 per SM. Zero-latency access.
+\end{itemize}
+
+\section{Compute vs. Memory Bound Analysis}
+
+An operation is:
+\begin{itemize}
+	\item \textbf{Compute-bound} if arithmetic intensity $> \frac{\text{peak FLOPS}}{\text{memory bandwidth}}$ (e.g., FFN layers).
+	\item \textbf{Memory-bound} otherwise (e.g., attention with KV cache, embedding lookup).
+\end{itemize}
+
+For an A100 (312\,TFLOPS FP16, 2\,TB/s HBM bandwidth), the threshold is $I_{\text{crit}} = 312 / 2 = 156$\,FLOPs/byte. FFN layers: $I \approx 200$\,FLOPs/byte (compute-bound). Attention: $I \approx 20$\,FLOPs/byte (memory-bound).
+
+\section{Tensor Cores and Mixed Precision}
+
+Tensor Cores perform $4 \times 4$ matrix multiply-accumulate in one cycle:
+\begin{equation}
+	D = A \cdot B + C,
+\end{equation}
+where $A$ and $B$ are FP16/BF16/INT8 and $D$ and $C$ are FP16/INT32.
+
+Mixed-precision training uses FP16/BF16 for forward/backward with FP32 master weights for numerical stability.
+
+\subsection{Hopper-Specific Features}
+
+NVIDIA H100 introduces:
+\begin{itemize}
+	\item \textbf{FP8 Tensor Cores:} 2$\times$ throughput vs. FP16, with E4M3/E5M2 formats.
+	\item \textbf{Transformer Engine:} automatic FP8/FP16 selection per layer based on activation statistics.
+	\item \textbf{DPX instructions:} accelerate dynamic programming (Smith-Waterman, Floyd-Warshall) used in some sequence alignment tasks.
+	\item \textbf{Aynchronous transactions:} overlapping data movement with computation via thread block clusters.
+\end{itemize}
+
+\section{Parallelism Strategies}
+
+\begin{itemize}
+	\item \textbf{Tensor parallelism (TP):} each layer's parameters are sharded across GPUs. Requires all-reduce per sub-layer. Optimal when intra-node NVLink bandwidth is high.
+	\item \textbf{Pipeline parallelism (PP):} layers are partitioned into stages. Bubble overhead is $\frac{(P-1) \cdot (M-1)}{P \cdot M}$ where $P$ is the number of pipeline stages and $M$ is the number of micro-batches.
+	\item \textbf{Sequence parallelism:} the sequence dimension is split across GPUs. Each GPU processes a segment of the sequence.
+	\item \textbf{Expert parallelism (MoE):} each expert is placed on a different GPU; tokens are routed via all-to-all communication.
+\end{itemize}
+
+\subsection{Interconnects}
+
+\begin{itemize}
+	\item \textbf{NVLink (H100):} 900 GB/s bidirectional per GPU, direct GPU-to-GPU.
+	\item \textbf{InfiniBand (HDR200):} 400 Gb/s per link, used for inter-node communication.
+	\item \textbf{PCIe Gen5:} 128 GB/s per direction, used for host-to-GPU transfer.
+\end{itemize}
+
+\section{Kernel Fusion}
+
+Launching many small GPU kernels incurs overhead. Kernel fusion combines operations:
+\begin{itemize}
+	\item \textbf{Fused attention:} combine $QK^\top$, softmax, dropout, $SV$ into one kernel.
+	\item \textbf{Fused layer norm + residual + quantisation:} one kernel for all three.
+	\item \textbf{Flash Attention} (see \S10.3) is the canonical fused attention kernel.
+\end{itemize}
+
+\section{Exercises}
+
+\begin{enumerate}
+	\item Compute the arithmetic intensity of a single transformer FFN layer.
+	\item Explain why memory-bound operations benefit more from kernel fusion.
+	\item Compare the communication costs of TP and PP for a 70B model on 8 GPUs.
+	\item Calculate the HBM bandwidth utilisation for an H100 running FP8 attention at batch size 1, sequence length 8192.
+	\item Show that the roofline model predicts compute-bound behaviour for FFN layers but memory-bound for attention.
+\end{enumerate}
+
+% ============================================================
+\chapter{Software Engineering for LLMs}
+\label{ch:se}
+
+\section{Prompt Engineering Patterns}
+
+\begin{definition}[Chain-of-Thought (CoT)]
+	Elicit intermediate reasoning before the final answer:
+	\begin{lstlisting}
+  Q: {question}
+  A: Let's think step by step.
+  \end{lstlisting}
+\end{definition}
+
+\begin{definition}[Few-Shot Prompting]
+	Provide $k$ exemplars of the task in the prompt:
+	\begin{lstlisting}
+  Input:  x_1  ->  Output:  y_1
+  Input:  x_2  ->  Output:  y_2
+  ...
+  Input:  x_k  ->  Output:  y_k
+  Input:  x    ->  Output:
+  \end{lstlisting}
+\end{definition}
+
+\begin{definition}[Structured Output Parsing]
+	Request machine-parseable output formats:
+	\begin{lstlisting}
+  Output in JSON:
+  {
+    "answer": "...",
+    "reasoning": "...",
+    "confidence": 0.95
+  }
+  \end{lstlisting}
+\end{definition}
+
+\section{Retrieval-Augmented Generation (RAG)}
+
+RAG augments LLM input with retrieved documents:
+\begin{equation}
+	p(y \mid x) = \sum_{d \in \text{Retrieve}(x)} p_{\text{LLM}}(y \mid x, d) p_{\text{retriever}}(d \mid x).
+\end{equation}
+
+The canonical RAG pipeline:
+\begin{enumerate}
+	\item \textbf{Indexing:} chunk documents into passages; embed with a dense retriever (e.g., BERT, E5).
+	\item \textbf{Retrieval:} given query $q$, find top-$k$ passages by cosine similarity: $\text{top-}k \cos(E(q), E(D))$.
+	\item \textbf{Generation:} concatenate query and retrieved passages as LLM input.
+\end{enumerate}
+
+\subsection{Advanced RAG Patterns}
+
+\begin{itemize}
+	\item \textbf{Hierarchical retrieval:} first retrieve documents, then passages within documents.
+	\item \textbf{Query rewriting:} use the LLM to rewrite the query before retrieval.
+	\item \textbf{HyDE (Hypothetical Document Embedding):} generate a hypothetical answer, then retrieve based on that answer's embedding.
+	\item \textbf{Iterative retrieval:} after each generation step, retrieve additional context.
+	\item \textbf{Self-RAG:} the LLM decides when to retrieve, what to retrieve, and whether to use retrieved information.
+\end{itemize}
+
+\section{Agent Architectures}
+
+LLM agents extend the model with tools and structured reasoning:
+\begin{lstlisting}
+  def agent_loop(query):
+      messages = [system_prompt, user_message(query)]
+      while not done:
+          response = llm(messages)
+          action = parse_action(response)
+          if action.type == "call_tool":
+              result = execute_tool(action.name, action.args)
+              messages.append({"role": "tool", "content": result})
+          elif action.type == "final_answer":
+              return action.content
+\end{lstlisting}
+
+\section{Testing and Evaluation}
+
+\begin{itemize}
+	\item \textbf{Unit testing:} test individual prompt templates, parsing logic, and tool integrations.
+	\item \textbf{Regression testing:} maintain a set of canonical inputs and expected outputs; measure pass rate across model versions.
+	\item \textbf{Evaluation suites:} MMLU (knowledge), HumanEval (code), MT-Bench (conversation), HELM (holistic).
+	\item \textbf{Hallucination detection:} measure token-level perplexity, semantic entropy, or self-consistency across multiple samples.
+\end{itemize}
+
+\section{Production Deployment Patterns}
+
+\begin{itemize}
+	\item \textbf{Serve with an inference engine:} vLLM, TGI, TensorRT-LLM.
+	\item \textbf{Load balancing:} round-robin or least-connections across model replicas.
+	\item \textbf{Caching:} KV cache reuse for common prefixes; semantic caching for identical queries.
+	\item \textbf{Monitoring:} latency, throughput, TTFT (time to first token), ITL (inter-token latency).
+	\item \textbf{Guardrailing:} input/output content filtering, PII detection, topic blocking.
+\end{itemize}
+
+\section{Exercises}
+
+\begin{enumerate}
+	\item Implement a RAG pipeline pseudocode with chunking, embedding, retrieval, and generation.
+	\item Design an agent that can use a calculator, a web search tool, and a database query tool.
+	\item Propose a testing strategy for an LLM-based code generation system.
+	\item Compare the latency impact of adding a retrieval step to an LLM call.
+\end{enumerate}
+
+% ============================================================
+% Part VI: Practice
+% ============================================================
+\part{Practice}
+
+% ============================================================
+\chapter{Libraries and Frameworks}
+\label{ch:libraries}
+
+\section{HuggingFace Transformers}
+
+The de facto standard library for LLMs:
+\begin{lstlisting}
+  from transformers import AutoModelForCausalLM, AutoTokenizer
+
+  model = AutoModelForCausalLM.from_pretrained(
+      "meta-llama/Llama-3.1-8B-Instruct",
+      torch_dtype=torch.bfloat16,
+      device_map="auto",
+      attn_implementation="flash_attention_2",
+  )
+  tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
+\end{lstlisting}
+
+Key features: model hub, pipeline API, trainer, quantisation (bitsandbytes), PEFT (LoRA).
+
+\section{vLLM}
+
+High-throughput serving with PagedAttention:
+\begin{lstlisting}
+  from vllm import LLM, SamplingParams
+
+  llm = LLM("meta-llama/Llama-3.1-8B-Instruct")
+  params = SamplingParams(temperature=0.7, top_p=0.9, max_tokens=512)
+  outputs = llm.generate(prompts, params)
+\end{lstlisting}
+
+Key features: continuous batching, PagedAttention, prefix caching, tensor parallelism, AWQ/GPTQ quantisation, OpenAI-compatible API server.
+
+\section{TensorRT-LLM}
+
+NVIDIA's optimised inference framework:
+\begin{lstlisting}
+  # Build engine
+  trtllm-build --model_dir llama-8b \
+    --dtype bfloat16 \
+    --max_batch_size 64 \
+    --max_input_len 4096 \
+    --max_output_len 1024
+
+  # Run server
+  python scripts/launch_triton_server.py \
+    --model_repository=/models/llama-8b \
+    --world_size=4
+\end{lstlisting}
+
+Key features: FP8 quantisation, in-flight batching, multi-GPU tensor parallelism, CUDA graph optimisation, speculative decoding.
+
+\section{llama.cpp}
+
+CPU-first inference with GGUF quantised models:
+\begin{lstlisting}
+  ./llama-cli -m llama-8b.Q4_K_M.gguf \
+    -p "Once upon a time" \
+    -n 256 -t 8
+\end{lstlisting}
+
+Key features: GGUF quantisation (2--8 bit), CPU/GPU hybrid, Metal/CUDA/Vulkan backends, no Python dependency.
+
+\section{LangChain}
+
+Framework for LLM application development:
+\begin{lstlisting}
+  from langchain.chains import RetrievalQA
+  from langchain_community.vectorstores import FAISS
+  from langchain_huggingface import HuggingFaceEmbeddings
+
+  retriever = FAISS.from_texts(docs, HuggingFaceEmbeddings()).as_retriever()
+  qa = RetrievalQA.from_llm(llm, retriever=retriever)
+  result = qa.invoke("What is the capital of France?")
+\end{lstlisting}
+
+Key features: modular chains, agent frameworks, tool integration, memory, and streaming.
+
+\section{LlamaIndex}
+
+Data framework for RAG applications:
+\begin{lstlisting}
+from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
+
+documents = SimpleDirectoryReader("data/").load_data()
+index = VectorStoreIndex.from_documents(documents)
+query_engine = index.as_query_engine()
+  response = query_engine.query("What does the document say about X?")
+\end{lstlisting}
+
+Key features: advanced indexing strategies (tree, keyword, hybrid), query routing, document agents, structured data extraction.
+
+\section{Comparison Table}
+
+\begin{longtable}{p{3cm}p{3cm}p{3cm}p{3cm}p{3cm}}
+	\toprule
+	\textbf{Framework} & \textbf{Use Case}     & \textbf{Quantisation}   & \textbf{Batching} & \textbf{GPU req.} \\
+	\midrule
+	HF Transformers    & Research, prototyping & GPTQ, AWQ, bitsandbytes & Static            & $\geq 1$ GPU      \\
+	vLLM               & Production serving    & GPTQ, AWQ, FP8          & Continuous        & $\geq 1$ GPU      \\
+	TensorRT-LLM       & Max throughput        & FP8, INT4, INT8         & In-flight         & $\geq 1$ GPU      \\
+	llama.cpp          & Local/edge inference  & GGUF 2--8 bit           & Static            & CPU/any GPU       \\
+	LangChain          & Application dev       & N/A (uses backend)      & N/A               & N/A               \\
+	LlamaIndex         & RAG systems           & N/A (uses backend)      & N/A               & N/A               \\
+	\bottomrule
+\end{longtable}
+
+\section{Exercises}
+
+\begin{enumerate}
+	\item Deploy a Llama 3.1 8B model using vLLM with tensor parallelism on 2 GPUs.
+	\item Quantise a model to 4-bit using AWQ and compare the perplexity vs.\ FP16.
+	\item Build a RAG pipeline with LlamaIndex that retrieves from a PDF collection.
+	\item Compare the throughput of vLLM vs. llama.cpp for a 7B model on the same hardware.
+\end{enumerate}
+
+% ============================================================
+\chapter{Evaluation and Advanced Topics}
+\label{ch:evaluation}
+
+\section{Benchmark Suites}
+
+\begin{longtable}{p{3.5cm}p{5cm}p{5cm}}
+	\toprule
+	\textbf{Benchmark} & \textbf{What it measures}          & \textbf{Format}      \\
+	\midrule
+	MMLU               & Multi-task knowledge (57 subjects) & 4-way MCQ            \\
+	HumanEval          & Code generation correctness        & Function completion  \\
+	MT-Bench           & Multi-turn conversation quality    & LLM-as-judge scoring \\
+	GSM8K              & Grade-school math reasoning        & Chain-of-thought     \\
+	HELM               & Holistic evaluation (42 scenarios) & Multi-metric         \\
+	BigBench           & Diverse reasoning tasks            & Varied               \\
+	HellaSwag          & Commonsense reasoning              & Sentence completion  \\
+	\bottomrule
+\end{longtable}
+
+\section{Hallucination and Calibration}
+
+An LLM is \emph{calibrated} if its confidence matches its accuracy:
+\begin{equation}
+	\mathbb{P}(\text{correct} \mid p_{\text{max}} = c) = c \quad \forall c \in [0,1].
+\end{equation}
+
+Calibration is measured with expected calibration error (ECE):
+\begin{equation}
+	\text{ECE} = \sum_{m=1}^{M} \frac{|B_m|}{N} \left|\text{acc}(B_m) - \overline{\text{conf}}(B_m)\right|,
+\end{equation}
+where bins $B_m$ partition $[0,1]$.
+
+\subsection{Hallucination Taxonomies}
+
+\begin{itemize}
+	\item \textbf{Factual hallucination:} model asserts false information (e.g., ``The Eiffel Tower is in London'').
+	\item \textbf{Contextual hallucination:} model contradicts provided context (e.g., ignoring retrieved documents).
+	\item \textbf{Reasoning hallucination:} model makes logical errors in multi-step reasoning.
+	\item \textbf{Instruction hallucination:} model performs a different task than instructed.
+\end{itemize}
+
+Hallucination detection methods:
+\begin{itemize}
+	\item \textbf{Semantic entropy:} sample multiple answers, cluster by meaning, measure dispersion.
+	\item \textbf{Self-consistency:} chain-of-thought samples reach the same answer.
+	\item \textbf{P(True):} prompt the model to evaluate its own answer's correctness.
+	\item \textbf{Context grounding:} verify that each claim is supported by the retrieved context.
+\end{itemize}
+
+\section{Safety Evaluation}
+
+\begin{itemize}
+	\item \textbf{Red-teaming:} adversarial testing to find failure modes.
+	\item \textbf{Refusal rate:} fraction of harmful prompts correctly refused.
+	\item \textbf{Sycophancy:} tendency to agree with user even when wrong.
+	\item \textbf{Benchmark contamination:} test set overlap with training data inflates scores.
+\end{itemize}
+
+\section{Outlook: The Future of LLM Engineering}
+
+The field is evolving rapidly. Key directions:
+\begin{itemize}
+	\item \textbf{MoE architecture:} Mixture-of-Experts enables larger models with constant inference cost.
+	\item \textbf{Long context:} 1M+ token context windows are becoming practical.
+	\item \textbf{Multimodality:} native image, video, and audio understanding.
+	\item \textbf{Agentic workflows:} LLMs as autonomous agents with tool use and planning.
+	\item \textbf{Hardware co-design:} custom accelerators (Groq, Cerebras, Etched) for transformer inference.
+	\item \textbf{Test-time compute scaling:} spending more compute at inference (CoT, search, self-consistency) improves reasoning quality.
+\end{itemize}
+
+\section{Final Project}
+
+\begin{enumerate}
+	\item Select an open-source LLM and deploy it with vLLM.
+	\item Implement a structured extraction pipeline that parses JSON outputs.
+	\item Build an agent with tool calling (calculator, search, database).
+	\item Measure latency, throughput, and TTFT under varying batch sizes.
+	\item Quantise the model to 4-bit and measure the quality degradation.
+	\item Write a report summarising the trade-offs observed.
+\end{enumerate}
+
+% ============================================================
+\newpage
+\begin{thebibliography}{99}
+
+	\bibitem{shannon1948} C. E. Shannon, ``A Mathematical Theory of Communication,'' \emph{Bell System Technical Journal}, 1948.
+
+	\bibitem{vaswani2017} A. Vaswani et al., ``Attention Is All You Need,'' \emph{NeurIPS}, 2017.
+
+	\bibitem{kaplan2020} J. Kaplan et al., ``Scaling Laws for Neural Language Models,'' \emph{arXiv:2001.08361}, 2020.
+
+	\bibitem{hoffmann2022} J. Hoffmann et al., ``Training Compute-Optimal Large Language Models,'' \emph{NeurIPS}, 2022.
+
+	\bibitem{dao2022} T. Dao et al., ``FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness,'' \emph{NeurIPS}, 2022.
+
+	\bibitem{leviathan2022} Y. Leviathan et al., ``Fast Inference from Transformers via Speculative Decoding,'' \emph{ICML}, 2022.
+
+	\bibitem{chen2023} C. Chen et al., ``Accelerating Large Language Model Decoding with Speculative Sampling,'' \emph{arXiv:2302.01318}, 2023.
+
+	\bibitem{frantar2023} E. Frantar et al., ``GPTQ: Accurate Post-Training Quantization for Generative Pre-Trained Transformers,'' \emph{ICLR}, 2023.
+
+	\bibitem{lin2023} J. Lin et al., ``AWQ: Activation-aware Weight Quantization for LLM Compression and Acceleration,'' \emph{MLSys}, 2023.
+
+	\bibitem{kwon2023} W. Kwon et al., ``Efficient Memory Management for Large Language Model Serving with PagedAttention,'' \emph{SOSP}, 2023.
+
+	\bibitem{ouyang2022} L. Ouyang et al., ``Training Language Models to Follow Instructions with Human Feedback,'' \emph{NeurIPS}, 2022.
+
+	\bibitem{rae2022} J. W. Rae et al., ``Scaling Language Models: Methods, Analysis \& Insights from Training Gopher,'' \emph{arXiv:2112.11446}, 2022.
+
+	\bibitem{touvron2023} H. Touvron et al., ``Llama 2: Open Foundation and Fine-Tuned Chat Models,'' \emph{arXiv:2307.09288}, 2023.
+
+	\bibitem{dubey2024} A. Dubey et al., ``The Llama 3 Herd of Models,'' \emph{arXiv:2407.21783}, 2024.
+
+	\bibitem{jiang2023} A. Q. Jiang et al., ``Mistral 7B,'' \emph{arXiv:2310.06825}, 2023.
+
+	\bibitem{tishby1999} N. Tishby et al., ``The Information Bottleneck Method,'' \emph{Allerton Conference}, 1999.
+
+	\bibitem{perez2021} J. Perez et al., ``True Few-Shot Learning with Language Models,'' \emph{NeurIPS}, 2021.
+
+	\bibitem{wei2022} J. Wei et al., ``Chain-of-Thought Prompting Elicits Reasoning in Large Language Models,'' \emph{NeurIPS}, 2022.
+
+	\bibitem{lewis2020} P. Lewis et al., ``Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks,'' \emph{NeurIPS}, 2020.
+
+	\bibitem{rafailov2023} R. Rafailov et al., ``Direct Preference Optimization: Your Language Model is Secretly a Reward Model,'' \emph{NeurIPS}, 2023.
+
+	\bibitem{schulman2017} J. Schulman et al., ``Proximal Policy Optimization Algorithms,'' \emph{arXiv:1707.06347}, 2017.
+
+	\bibitem{gu2023} A. Gu \& T. Dao, ``Mamba: Linear-Time Sequence Modeling with Selective State Spaces,'' \emph{arXiv:2312.00752}, 2023.
+
+	\bibitem{dao2024} T. Dao \& A. Gu, ``Transformers are SSMs: Generalized Models and Efficient Algorithms,'' \emph{arXiv:2405.21060}, 2024.
+
+	\bibitem{gu2022} A. Gu et al., ``Efficiently Modeling Long Sequences with Structured State Spaces,'' \emph{ICLR}, 2022.
+
+	\bibitem{sennrich2016} R. Sennrich et al., ``Neural Machine Translation of Rare Words with Subword Units,'' \emph{ACL}, 2016.
+
+	\bibitem{kudo2018} T. Kudo \& J. Richardson, ``SentencePiece: A Simple and Language Independent Subword Tokenizer,'' \emph{EMNLP}, 2018.
+
+	\bibitem{chen2023pi} S. Chen et al., ``Extending Context Window of Large Language Models via Position Interpolation,'' \emph{arXiv:2306.15595}, 2023.
+
+	\bibitem{peng2023} B. Peng et al., ``YaRN: Efficient Context Window Extension of Large Language Models,'' \emph{arXiv:2309.00071}, 2023.
+
+	\bibitem{bloc2023} bloc97, ``NTK-Aware Scaled RoPE,'' \emph{GitHub issue \#133}, 2023.
+
+	\bibitem{fedus2022} W. Fedus et al., ``Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity,'' \emph{JMLR}, 2022.
+
+	\bibitem{lepikhin2021} D. Lepikhin et al., ``GShard: Scaling Giant Models with Conditional Computation and Automatic Sharding,'' \emph{ICLR}, 2021.
+
+	\bibitem{dai2024} DeepSeek-AI, ``DeepSeek-V2: A Strong, Economical, and Efficient Mixture-of-Experts Language Model,'' \emph{arXiv:2405.04434}, 2024.
+
+	\bibitem{dai2025} DeepSeek-AI, ``DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning,'' \emph{arXiv:2501.12948}, 2025.
+
+	\bibitem{razin2024} N. Razin et al., ``Likelihood Displacement in Direct Preference Optimization,'' \emph{arXiv:2405.14853}, 2024.
+
+	\bibitem{weiss2021} G. Weiss et al., ``Thinking Like a Transformer: A Theoretical Analysis of the Expressive Power of Transformers,'' \emph{ICLR}, 2021.
+
+	\bibitem{merrill2023} W. Merrill \& A. Sabharwal, ``The Parallelism Tradeoff: Limitations of Log-Precision Transformers,'' \emph{ICLR}, 2023.
+
+	\bibitem{press2022} O. Press et al., ``Train Short, Test Long: Attention with Linear Biases Enables Input Length Extrapolation,'' \emph{ICLR}, 2022.
+
+	\bibitem{shazeer2017} N. Shazeer et al., ``Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer,'' \emph{ICLR}, 2017.
+
+	\bibitem{zhou2024} Z. Zhou et al., ``LongRoPE: Extending LLM Context Window Beyond 2 Million Tokens,'' \emph{arXiv:2402.13753}, 2024.
+
+	\bibitem{cai2024} T. Cai et al., ``Medusa: Simple LLM Inference Acceleration Framework with Multiple Decoding Heads,'' \emph{ICML}, 2024.
+
+\end{thebibliography}
+
+\end{document}

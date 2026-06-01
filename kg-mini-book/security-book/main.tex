@@ -1,0 +1,141 @@
+\documentclass[11pt,a4paper]{book}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{bbm}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{xspace}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{graphicx}
+\usepackage{epigraph}
+\usepackage[numbers,sort&compress]{natbib}
+
+\setlength{\headheight}{14pt}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  columns=fullflexible,
+  frame=single,
+  backgroundcolor=\color{gray!5},
+  aboveskip=6pt,
+  belowskip=6pt,
+  extendedchars=true,
+  inputencoding=utf8,
+  showstringspaces=false
+}
+
+\lstdefinelanguage{ASM}{
+  morekeywords={mov,add,sub,mul,div,xor,and,or,cmp,jmp,je,jne,jg,jl,jge,
+                jle,call,ret,push,pop,lea,syscall,nop,inc,dec,shl,shr,
+                not,neg,imul,idiv,cdq,cqo,test,sete,setne},
+  sensitive=false,
+  morecomment=[l]{;}
+}
+
+\lstdefinelanguage{Radare2}{
+  morekeywords={af,aaa,afl,pdf,pd,iz,izz,izw, aflq, s, vv, q},
+  sensitive=false
+}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[chapter]
+\newtheorem{theorem}{Theorem}[chapter]
+\newtheorem{lemma}{Lemma}[chapter]
+\newtheorem{corollary}{Corollary}[chapter]
+\newtheorem{principle}{Principle}[chapter]
+\newtheorem{example}{Example}[chapter]
+\newtheorem{remark}{Remark}[chapter]
+
+\theoremstyle{plain}
+\newtheorem{exercise}{Exercise}[chapter]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE,RO]{\leftmark}
+\fancyhead[RE,LO]{\rightmark}
+\fancyfoot[C]{\thepage}
+
+\titleformat{\chapter}[display]
+  {\bfseries\Large}
+  {\chaptername\ \thechapter}
+  {20pt}
+  {\Huge}
+
+\setlist{nosep}
+
+\newcommand{\learninggoal}[1]{\subsection*{Learning Goals}\begin{itemize}#1\end{itemize}}
+\newcommand{\keyinsight}[1]{\medskip\noindent\textbf{Key Insight:} #1\medskip}
+\newcommand{\takeaway}[1]{\medskip\noindent\textbf{Takeaway:} #1\medskip}
+\newcommand{\reading}[1]{\begin{quote}\small\textit{Recommended reading:} #1\end{quote}}
+\newcommand{\gdb}{\texttt{gdb}\xspace}
+\newcommand{\ASLR}{ASLR\xspace}
+\newcommand{\DEP}{DEP\xspace}
+
+\begin{document}
+
+\title{\Huge\textbf{Security Fundamentals and Low-Level Programming}\\[0.5cm]
+	\large Memory, Machine Code, and the Attack Surface}
+\author{Bernard}
+\date{\today}
+\maketitle
+\thispagestyle{empty}
+
+\vfill
+\begin{quote}
+	\emph{``You don't understand security until you understand what the processor actually does.''}
+\end{quote}
+\vfill
+
+\newpage
+\tableofcontents
+\newpage
+
+% ============================================================
+\part{Foundations}
+% ============================================================
+\include{chapters/01-introduction}
+\include{chapters/02-memory-model}
+\include{chapters/03-architecture}
+\include{chapters/04-memory-unsafety}
+
+% ============================================================
+\part{Exploitation and Defence}
+% ============================================================
+\include{chapters/05-exploitation}
+\include{chapters/06-protections}
+\include{chapters/07-kernel}
+
+% ============================================================
+\part{Applied Low-Level Security}
+% ============================================================
+\include{chapters/08-network}
+\include{chapters/09-crypto}
+\include{chapters/10-secure-dev}
+
+% ============================================================
+\newpage
+\bibliographystyle{unsrtnat}
+\bibliography{references}
+
+\end{document}

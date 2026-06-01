@@ -1,0 +1,96 @@
+\chapter{Introduction to Low-Level Security}
+\label{ch:introduction}
+
+\epigraph{``You don't understand security until you understand what the processor actually does.''}{}
+
+\learninggoal{
+	\item Define security in the context of low-level systems and motivate the study of computer architecture.
+	\item Distinguish between security, safety, and correctness.
+	\item Identify the three core principles of the CIA triad and their relevance to systems programming.
+	\item Trace the historical roots of low-level security vulnerabilities.
+	\item Outline the roadmap of this book.
+}
+
+\section{Why Low-Level Security Matters}
+
+Most security discussions focus on high-level concerns---passwords, firewalls, encryption protocols, web application vulnerabilities. These are important, but they rest on a foundation that is often ignored: the behaviour of the processor, the memory subsystem, and the machine code that runs on them.
+
+A web application firewall cannot help if an attacker has already achieved arbitrary code execution through a buffer overflow. A strong password is irrelevant if a format string vulnerability leaks the master password from memory. Encryption is useless if the plaintext lingers on the heap after use.
+
+Low-level security is the study of what happens at the instruction-set architecture (ISA) level, in the memory model exposed by the operating system, and in the interface between user code and the kernel. It asks: given that the processor executes exactly the sequence of bytes we provide, what can go wrong?
+
+\begin{definition}[Low-Level Security]
+	\textbf{Low-level security} is the branch of computer security concerned with vulnerabilities and defences that arise from the behaviour of processors, memory subsystems, operating system kernels, and the machine-code interface between software and hardware.
+\end{definition}
+
+\begin{example}[The Real Cost of Low-Level Bugs]
+	In 2014, the Heartbleed vulnerability (CVE-2014-0160) allowed attackers to read arbitrary memory from OpenSSL servers. The bug was a missing bounds check in a single \texttt{memcpy} call. It exposed passwords, private keys, and session data from millions of servers. No cryptographic weakness was involved---the bug was purely a low-level memory safety issue.
+\end{example}
+
+\section{Security vs. Safety vs. Correctness}
+
+A useful distinction before we proceed:
+
+\begin{itemize}
+	\item \textbf{Correctness:} the program behaves according to its specification. A correct program produces the right output for every legal input.
+	\item \textbf{Safety:} the program does not cause harm, even when it behaves incorrectly. A type-safe language prevents memory corruption even if the logic is buggy.
+	\item \textbf{Security:} the program resists intentional subversion by an adversary. A secure program must be correct and safe \emph{under attack}.
+\end{itemize}
+
+These are nested requirements. Security subsumes safety, which subsumes correctness---but only in the direction of the adversary's goals. Many correct programs are unsafe (they corrupt memory on edge cases). Many safe programs are insecure (they leak information through side channels).
+
+\begin{principle}[The Attacker's Advantage]
+	An attacker needs only one bug. The defender must eliminate all bugs. This asymmetry drives the entire field of low-level security.
+\end{principle}
+
+\section{The CIA Triad}
+
+Security is traditionally organised around three goals:
+
+\begin{description}
+	\item[Confidentiality] Preventing unauthorised information disclosure. Memory disclosure vulnerabilities (Heartbleed, Spectre) violate confidentiality.
+	\item[Integrity] Preventing unauthorised modification. Buffer overflows that overwrite return addresses violate integrity.
+	\item[Availability] Ensuring the system remains usable. Denial-of-service attacks violate availability.
+\end{description}
+
+In low-level security, confidentiality and integrity are the primary concerns. An attacker who achieves arbitrary code execution has breached both: they can read any memory (confidentiality) and write any memory (integrity).
+
+\section{A Brief History of Low-Level Security}
+
+The field has evolved through several eras:
+
+\paragraph{Era 1: The Stack Smash (1988--2000)} The Morris worm (1988) exploited a buffer overflow in \texttt{fingerd}. Aleph One's seminal paper ``Smashing the Stack for Fun and Profit''~\cite{aleph1996smashing} in 1996 codified the technique. For years, stack buffer overflows dominated the vulnerability landscape.
+
+\paragraph{Era 2: Heap and Format String (2000--2005)} Attackers moved beyond the stack. Heap overflows, use-after-free bugs, and format string vulnerabilities~\cite{scut2003nop} expanded the attack surface. The rise of network services created a pipeline: network input $\to$ parsing $\to$ memory corruption $\to$ code execution.
+
+\paragraph{Era 3: Mitigation Arms Race (2005--2015)} Defenders introduced stack canaries, non-executable stacks (\DEP), address space layout randomisation (\ASLR), and control-flow integrity~\cite{abadi2005cfi}. Attackers responded with return-oriented programming (ROP)~\cite{shacham2007return} and information leaks.
+
+\paragraph{Era 4: Beyond Memory Corruption (2015--present)} Side-channel attacks (Spectre, Meltdown), kernel exploitation techniques, and the rise of memory-safe languages (Rust, Go) characterise the current era. The fundamental problems remain unsolved: C and C++ code still dominate systems programming, and every new memory corruption bug is a potential exploit.
+
+\section{Who This Book Is For}
+
+This book is for programmers who want to understand security from the silicon up. You should know C at an intermediate level---pointers, manual memory management, and basic data structures. You do not need prior security experience. Assembly language will be introduced as needed.
+
+\section{How This Book Is Organised}
+
+The book is divided into three parts:
+
+\begin{description}
+	\item[Part I: Foundations (Chapters~\ref{ch:introduction}--\ref{ch:memory-unsafety})] covers the essential background: how memory works, how processors execute code, and what memory unsafety means at the machine level. By the end of Part I, you will be able to read assembly, understand virtual memory, and identify the root causes of the most common vulnerability classes.
+	\item[Part II: Exploitation and Defence (Chapters~\ref{ch:exploitation}--\ref{ch:kernel})] covers the techniques attackers use to turn memory corruption into code execution, and the defences that prevent them. You will learn shellcoding, ROP, ASLR bypasses, and the kernel attack surface.
+	\item[Part III: Applied Low-Level Security (Chapters~\ref{ch:network}--\ref{ch:secure-dev})] extends the low-level mindset to network protocols, cryptography, and secure development practices.
+\end{description}
+
+\section{Exercises}
+
+\begin{exercise}
+	Research the Morris worm (1988). What vulnerability did it exploit? How did the security community respond? Write a one-paragraph summary.
+\end{exercise}
+
+\begin{exercise}
+	Identify a recent CVE (2020 or later) classified as a buffer overflow. Read the description and the patch. What was the root cause? How many lines of code changed to fix it?
+\end{exercise}
+
+\begin{exercise}
+	Consider a simple C program that reads a name from stdin and prints a greeting. List three ways an attacker could violate the CIA triad through this program, assuming no security mitigations are enabled.
+\end{exercise}
