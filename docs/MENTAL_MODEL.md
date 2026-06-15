@@ -40,11 +40,13 @@ P(next_token | input_question, tokens_so_far)
 ```
 
 The LLM is good at:
+
 - Understanding natural language questions
 - Following multi-step instructions
 - Generating fluent text
 
 The LLM is bad at:
+
 - **Verifying facts against a structured source**
 - The generation probability is computed from learned parameters only,
   with no mechanism to "look up" whether a candidate token is factually correct
@@ -168,15 +170,18 @@ The new oracle uses **two symbolic gates** that are pure set-containment checks:
 
 **Type gate** (terminal hop only):
   "Does the terminal entity's type match what the question asks for?"
-  - Question asks "who?" → only admit entities typed "Person"
-  - Question asks "where?" → only admit entities typed "Location"
+
+- Question asks "who?" → only admit entities typed "Person"
+- Question asks "where?" → only admit entities typed "Location"
 
 **Range gate** (every hop):
   "Does this relation's declared range match the entity it connects to?"
-  - Relation `people.person.nationality` has range {"Country"}
-  - If a path connects it to an entity typed "Film", block it
+
+- Relation `people.person.nationality` has range {"Country"}
+- If a path connects it to an entity typed "Film", block it
 
 Both gates are:
+
 - **Deterministic**: same input always produces same output
 - **Conservative**: admit by default when type info is missing
 - **O(1)**: two set lookups per check, no floating point
@@ -263,6 +268,7 @@ range includes "Country" are admitted. The LLM still makes the final
 choice, but the choice set is narrowed by the KG's own schema.
 
 **The reasoning is distributed:**
+
 - The **graph** provides the possibilities (via BFS)
 - The **oracle** narrows them (via ontology constraints)
 - The **LLM** selects among them (via parametric knowledge)

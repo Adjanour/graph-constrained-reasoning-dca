@@ -173,9 +173,7 @@ def serialize_path(path: list[tuple[str, str, str]]) -> str:
     return " ".join(f"{h} {r} {t}" for h, r, t in path)
 
 
-# ──────────────────────────────────────────────────────────────────────
 # Demo
-# ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     from sentence_transformers import SentenceTransformer
 
