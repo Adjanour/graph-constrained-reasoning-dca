@@ -67,6 +67,7 @@ def is_type_compatible(
 # Entity Masking (§3.5.1)
 # ──────────────────────────────────────────────────────────────────────
 
+
 def mask_entities(question: str, entities: list[str]) -> str:
     """Replace entity names with [MASK] so encoder focuses on relations."""
     masked = question
@@ -78,6 +79,7 @@ def mask_entities(question: str, entities: list[str]) -> str:
 # ──────────────────────────────────────────────────────────────────────
 # Entity Type Extraction
 # ──────────────────────────────────────────────────────────────────────
+
 
 def build_entity_type_map(
     graph_triples: list[tuple[str, str, str]],
@@ -151,9 +153,9 @@ def build_decomposed_trie(
         rte_str = f"{r_term} {e_terminal}"
         rte_emb = encoder.encode(rte_str, convert_to_numpy=True)
         n_encoder_calls += 1
-        rho_traj = float(cosine_similarity(
-            rte_emb.reshape(1, -1), u_q.reshape(1, -1)
-        )[0, 0])
+        rho_traj = float(
+            cosine_similarity(rte_emb.reshape(1, -1), u_q.reshape(1, -1))[0, 0]
+        )
 
         score = rel_score * rho_traj  # Eq. 3.12
 
@@ -193,11 +195,15 @@ if __name__ == "__main__":
     ]
 
     paths = [
-        [("Blue Hawaii", "film.director", "Norman Taurog"),
-         ("Norman Taurog", "people.person.nationality", "United States")],
+        [
+            ("Blue Hawaii", "film.director", "Norman Taurog"),
+            ("Norman Taurog", "people.person.nationality", "United States"),
+        ],
         [("Blue Hawaii", "film.featured_film_location", "Hawaii")],
-        [("Blue Hawaii", "film.director", "Norman Taurog"),
-         ("Norman Taurog", "people.person.spouse_s", "Kathryn Pringle")],
+        [
+            ("Blue Hawaii", "film.director", "Norman Taurog"),
+            ("Norman Taurog", "people.person.spouse_s", "Kathryn Pringle"),
+        ],
     ]
 
     result, kept, scores, n_blocked, n_enc = build_decomposed_trie(
