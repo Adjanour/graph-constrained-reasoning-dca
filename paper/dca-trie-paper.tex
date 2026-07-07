@@ -499,7 +499,7 @@ The formal verification comprises four theorems checked in Lean 4:
 \begin{enumerate}
 	\item \textbf{Hits@1:} Exact match accuracy on the answer entity.
 	\item \textbf{F1:} Token-level entity overlap between prediction and ground truth.
-	\item \textbf{Structural Irrelevance Rate (SIR):} Fraction of admitted paths that are irrelevant, decomposed as:
+	\item \textbf{Structural Irrelevance Rate (SIR):} Measures how many candidate paths are semantically irrelevant to the question (e.g., a path ending at a \texttt{color} entity for a question expecting a \texttt{person} answer). Decomposed as:
 	\begin{align*}
 		\text{SIR}^*_{\text{type}}(q) &= \frac{|\{p \in \mathcal{P}(q) : \text{irrel}_{\text{type}}(p,q) = 1\}|}{|\mathcal{P}(q)|} \\
 		\text{SIR}^*_{\text{traj}}(q) &= \frac{|\{p \in \mathcal{P}(q) : \text{irrel}_{\text{traj}}(p,q) = 1\}|}{|\mathcal{P}(q)|} \\
