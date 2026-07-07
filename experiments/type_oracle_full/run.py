@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """
-run.py — TypeOracle + KG-Specialized LLM full experiment.
+run.py — DCA-Trie full experiment: GCR baseline vs v1 (static) vs v2 (dynamic).
 
-Runs the complete DCA-Trie pipeline:
-  1. SIR/FNR evaluation (CPU-only) — measure pruning
-  2. Graph-constrained decoding with TypeOracle-filtered trie
-  3. Graph-constrained decoding with unfiltered trie (baseline)
-  4. Head-to-head comparison: Hit@1, path reduction, timing
+Runs all three conditions on one or both datasets, with checkpoint/resume.
 
 Usage:
-    python experiments/type_oracle_full/run.py
-    python experiments/type_oracle_full/run.py --max-samples 100
+    python experiments/type_oracle_full/run.py                          # both datasets, 50 samples
+    python experiments/type_oracle_full/run.py --datasets RoG-webqsp    # one dataset
+    python experiments/type_oracle_full/run.py --method v1              # v1 only
+    python experiments/type_oracle_full/run.py --method all             # baseline + v1 + v2
+    python experiments/type_oracle_full/run.py --max-samples 10
     python experiments/type_oracle_full/run.py --force-rerun
-    python experiments/type_oracle_full/run.py --output-dir /path/to/results
 """
 
 import argparse
@@ -22,7 +20,6 @@ import sys
 import time
 from pathlib import Path
 
-# Ensure project root is on sys.path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 os.chdir(PROJECT_ROOT)
@@ -34,17 +31,22 @@ from tqdm import tqdm
 from src.llms import get_registed_model
 from src.qa_prompt_builder import PathGenerationWithAnswerPromptBuilder
 from src.trie import MarisaTrie
-from src.utils.qa_utils import eval_path_result_w_ans, normalize, extract_topk_prediction
+from src.graph_constrained_decoding import GraphConstrainedDecoding
+from src.utils.qa_utils import normalize, extract_topk_prediction
 from approach3_symbolic.type_oracle import TypeOracle
 import src.utils as utils
 
 
+PATH_START = "<PATH>"
+PATH_END = "</PATH>"
+
+
 # ---------------------------------------------------------------------------
-# Helpers
+# Trie builders
 # ---------------------------------------------------------------------------
 
 def build_filtered_trie(tokenizer, question_dict, index_len, oracle):
-    """Build a MarisaTrie from TypeOracle-filtered paths."""
+    """Build a MarisaTrie from TypeOracle-filtered paths (v1 static)."""
     g = utils.build_graph(question_dict["graph"], undirected=False)
     entities = question_dict.get("q_entity", [])
     if not entities:
@@ -71,17 +73,14 @@ def build_filtered_trie(tokenizer, question_dict, index_len, oracle):
     if not filtered_str:
         return None, all_paths, filtered
 
-    PATH_START = "<PATH>"
-    PATH_END = "</PATH>"
     wrapped = [f"{PATH_START}{s}{PATH_END}" for s in filtered_str]
-
     tokenized = tokenizer(wrapped, padding=False, add_special_tokens=False).input_ids
     trie = MarisaTrie(tokenized, max_token_id=len(tokenizer) + 1)
     return trie, all_paths, filtered
 
 
 def build_unfiltered_trie(tokenizer, question_dict, index_len):
-    """Build a MarisaTrie from all DFS paths (no filtering)."""
+    """Build a MarisaTrie from all DFS paths (GCR baseline)."""
     g = utils.build_graph(question_dict["graph"], undirected=False)
     entities = question_dict.get("q_entity", [])
     if not entities:
@@ -92,14 +91,25 @@ def build_unfiltered_trie(tokenizer, question_dict, index_len):
     if not all_str:
         return None, all_paths
 
-    PATH_START = "<PATH>"
-    PATH_END = "</PATH>"
     wrapped = [f"{PATH_START}{s}{PATH_END}" for s in all_str]
-
     tokenized = tokenizer(wrapped, padding=False, add_special_tokens=False).input_ids
     trie = MarisaTrie(tokenized, max_token_id=len(tokenizer) + 1)
     return trie, all_paths
 
+
+def build_trie_from_strings(tokenizer, path_strings):
+    """Build a MarisaTrie from raw path strings (for v2 iterative expansion)."""
+    if not path_strings:
+        return None
+    wrapped = [f"{PATH_START}{s}{PATH_END}" for s in path_strings]
+    tokenized = tokenizer(wrapped, padding=False, add_special_tokens=False).input_ids
+    tokenized = [ids + [tokenizer.eos_token_id] for ids in tokenized]
+    return MarisaTrie(tokenized, max_token_id=len(tokenizer) + 1)
+
+
+# ---------------------------------------------------------------------------
+# Constrained decoding
+# ---------------------------------------------------------------------------
 
 def run_constrained_decoding(model, input_builder, data, trie):
     """Run graph-constrained decoding for a single question."""
@@ -116,8 +126,111 @@ def run_constrained_decoding(model, input_builder, data, trie):
     return prediction, ground_paths
 
 
+def dca_v2_generate(question, start_entities, nx_graph, llm_model,
+                    tokenizer, oracle, max_hops=2):
+    """
+    DCA-Trie v2: iterative hop-by-hop trie expansion (Algorithm 2).
+    Start with first-hop gated neighbours, expand at each entity commit.
+    """
+    answer_types = oracle.infer_answer_types(question)
+    start_id = tokenizer.convert_tokens_to_ids(PATH_START)
+    end_id = tokenizer.convert_tokens_to_ids(PATH_END)
+
+    first_hop_paths = []
+    for entity in start_entities:
+        if entity not in nx_graph:
+            continue
+        for neighbor in nx_graph.neighbors(entity):
+            rel = nx_graph[entity][neighbor]["relation"]
+            if not oracle.range_gate(rel, neighbor):
+                continue
+            first_hop_paths.append(f"{entity} -> {rel} -> {neighbor}")
+
+    if not first_hop_paths:
+        return None
+
+    current_trie = build_trie_from_strings(tokenizer, first_hop_paths)
+    if current_trie is None:
+        return None
+
+    prompt = (
+        f"Reasoning path is a sequence of triples in the KG that connects the topic entities "
+        f"to answer entities. Given the question, generate reasoning paths starting from "
+        f"the topic entities to answer the question.\n\n"
+        f"# Question:\n{question}\n"
+        f"# Topic entities:\n{', '.join(start_entities)}\n"
+    )
+
+    output_text = ""
+    committed_entity = start_entities[0] if start_entities else None
+    hop = 0
+
+    for step in range(max_hops * 3):
+        llm_input = llm_model.prepare_model_prompt(prompt)
+        gcr = GraphConstrainedDecoding(
+            tokenizer, current_trie, start_id, end_id,
+            enable_constrained_by_default=False
+        )
+        inputs = tokenizer(llm_input, return_tensors="pt", add_special_tokens=False)
+        input_ids = inputs.input_ids.to(llm_model.model.device)
+        attn_mask = inputs.attention_mask.to(llm_model.model.device)
+
+        res = llm_model.model.generate(
+            input_ids=input_ids,
+            attention_mask=attn_mask,
+            generation_config=llm_model.generation_cfg,
+            prefix_allowed_tokens_fn=gcr.allowed_tokens_fn,
+            return_dict_in_generate=True,
+            pad_token_id=tokenizer.eos_token_id,
+            max_new_tokens=32,
+        )
+
+        output = tokenizer.decode(
+            res.sequences[0][input_ids.shape[1]:], skip_special_tokens=True
+        )
+        output_text += output
+
+        if PATH_END in output or tokenizer.eos_token in output:
+            break
+
+        new_entity = output.replace(PATH_END, "").strip().split(" -> ")[-1].strip() if output else None
+        if new_entity is None or new_entity == committed_entity:
+            continue
+        committed_entity = new_entity
+        hop += 1
+
+        if hop >= max_hops:
+            break
+
+        is_terminal = (hop + 1 >= max_hops)
+        new_paths = []
+        if committed_entity in nx_graph:
+            for neighbor in nx_graph.neighbors(committed_entity):
+                rel = nx_graph[committed_entity][neighbor]["relation"]
+                if not oracle.range_gate(rel, neighbor):
+                    continue
+                if is_terminal and not oracle.type_gate(
+                    neighbor, answer_types, hop + 1, max_hops
+                ):
+                    continue
+                new_paths.append(f"{committed_entity} -> {rel} -> {neighbor}")
+
+        if new_paths:
+            expanded_trie = build_trie_from_strings(tokenizer, new_paths)
+            if expanded_trie is not None:
+                current_trie = expanded_trie
+                prompt = prompt + f"\n{output.strip()}\n"
+        else:
+            break
+
+    return output_text
+
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+
 def load_processed_ids(path):
-    """Load already-processed question IDs from a JSONL file."""
     ids = set()
     if os.path.exists(path):
         with open(path) as f:
@@ -129,16 +242,24 @@ def load_processed_ids(path):
     return ids
 
 
+def load_preds(path):
+    results = []
+    if os.path.exists(path):
+        with open(path) as f:
+            for line in f:
+                try:
+                    results.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    return results
+
+
 def compute_hits(preds):
-    """Compute Hits@1 from a list of prediction dicts."""
     hits = 0
     for p in preds:
         prediction = p.get("prediction", "")
         answer = list(set(p.get("ground_truth", [])))
-        if isinstance(prediction, list):
-            pred_str = " ".join(prediction)
-        else:
-            pred_str = prediction
+        pred_str = " ".join(prediction) if isinstance(prediction, list) else prediction
         top_preds = extract_topk_prediction(pred_str, -1)
         pred_joined = " ".join(top_preds)
         for a in answer:
@@ -149,34 +270,161 @@ def compute_hits(preds):
 
 
 # ---------------------------------------------------------------------------
+# Run one condition on one dataset
+# ---------------------------------------------------------------------------
+
+def run_condition(model, input_builder, dataset, cond_name, ds_dir, force_rerun):
+    """Run a single condition and return metrics dict."""
+    pred_path = ds_dir / f"predictions_{cond_name}.jsonl"
+    processed = set() if force_rerun else load_processed_ids(str(pred_path))
+    fout = open(pred_path, "a" if processed else "w")
+
+    n_done = 0
+    n_empty = 0
+    n_dead_ends = 0
+    t0 = time.time()
+
+    for d in dataset:
+        qid = d["id"]
+        if qid in processed:
+            continue
+
+        oracle = TypeOracle.from_graph(d["graph"])
+
+        if cond_name == "GCR_Baseline":
+            trie, all_paths = build_unfiltered_trie(model.tokenizer, d, 2)
+            if trie is None:
+                result = {"id": qid, "question": d["question"],
+                          "prediction": [], "ground_truth": d["answer"],
+                          "n_paths_all": 0, "mode": cond_name}
+                fout.write(json.dumps(result) + "\n")
+                fout.flush()
+                processed.add(qid)
+                n_done += 1
+                n_empty += 1
+                continue
+            try:
+                prediction, ground_paths = run_constrained_decoding(model, input_builder, d, trie)
+            except Exception:
+                prediction = None
+            result = {"id": qid, "question": d["question"],
+                      "prediction": prediction or [], "ground_truth": d["answer"],
+                      "n_paths_all": len(all_paths), "mode": cond_name}
+
+        elif cond_name == "DCA_v1_Static":
+            trie, all_paths, filtered = build_filtered_trie(model.tokenizer, d, 2, oracle)
+            if trie is None:
+                result = {"id": qid, "question": d["question"],
+                          "prediction": [], "ground_truth": d["answer"],
+                          "n_paths_all": len(all_paths) if all_paths else 0,
+                          "n_paths_filtered": 0, "mode": cond_name}
+                fout.write(json.dumps(result) + "\n")
+                fout.flush()
+                processed.add(qid)
+                n_done += 1
+                n_empty += 1
+                continue
+            try:
+                prediction, ground_paths = run_constrained_decoding(model, input_builder, d, trie)
+            except Exception:
+                prediction = None
+            result = {"id": qid, "question": d["question"],
+                      "prediction": prediction or [], "ground_truth": d["answer"],
+                      "n_paths_all": len(all_paths), "n_paths_filtered": len(filtered),
+                      "mode": cond_name}
+
+        elif cond_name == "DCA_v2_Dynamic":
+            nx_graph = utils.build_graph(d["graph"], undirected=False)
+            try:
+                prediction = dca_v2_generate(
+                    question=d["question"],
+                    start_entities=d.get("q_entity", []),
+                    nx_graph=nx_graph,
+                    llm_model=model,
+                    tokenizer=model.tokenizer,
+                    oracle=oracle,
+                    max_hops=2,
+                )
+                if prediction is None:
+                    n_dead_ends += 1
+            except Exception:
+                prediction = None
+            result = {"id": qid, "question": d["question"],
+                      "prediction": prediction or [], "ground_truth": d["answer"],
+                      "mode": cond_name}
+
+        fout.write(json.dumps(result) + "\n")
+        fout.flush()
+        processed.add(qid)
+        n_done += 1
+
+        if n_done % 10 == 0:
+            elapsed = time.time() - t0
+            rate = n_done / elapsed if elapsed > 0 else 0
+            print(f"    [{cond_name}] {n_done}/{len(dataset)} {rate:.2f} q/s | {elapsed:.0f}s")
+
+    fout.close()
+    elapsed = time.time() - t0
+
+    preds = load_preds(str(pred_path))
+    hits = compute_hits(preds)
+    n = len(preds)
+
+    # Path stats for v1
+    path_info = {}
+    if cond_name == "DCA_v1_Static" and n > 0:
+        total_all = sum(p.get("n_paths_all", 0) for p in preds)
+        total_filt = sum(p.get("n_paths_filtered", 0) for p in preds)
+        path_info = {
+            "total_paths_all": total_all,
+            "total_paths_filtered": total_filt,
+            "reduction_pct": round((1 - total_filt / max(1, total_all)) * 100, 1),
+        }
+
+    metrics = {
+        "condition": cond_name,
+        "n": n, "hits": hits,
+        "hit_at_1": round(hits / max(1, n) * 100, 1),
+        "time_s": round(elapsed, 1),
+        "n_dead_ends": n_dead_ends,
+        **path_info,
+    }
+
+    print(f"    {cond_name}: {n} questions, Hits@1={hits}/{n} ({metrics['hit_at_1']}%), {elapsed:.0f}s")
+    return metrics
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="TypeOracle full experiment")
+    parser = argparse.ArgumentParser(description="DCA-Trie full experiment")
     parser.add_argument("--model-path", default="rmanluo/GCR-Meta-Llama-3.1-8B-Instruct")
     parser.add_argument("--data-path", default="rmanluo")
-    parser.add_argument("--dataset", default="RoG-webqsp", choices=["RoG-webqsp", "RoG-cwq"])
-    parser.add_argument("--split", default="test", choices=["test", "validation"])
+    parser.add_argument("--datasets", nargs="+", default=["RoG-webqsp", "RoG-cwq"],
+                        choices=["RoG-webqsp", "RoG-cwq"])
+    parser.add_argument("--split", default="test")
     parser.add_argument("--index-len", type=int, default=2)
     parser.add_argument("-k", type=int, default=10)
     parser.add_argument("--gen-mode", default="group-beam", choices=["greedy", "group-beam", "beam"])
-    parser.add_argument("--prompt-mode", default="zero-shot", choices=["zero-shot", "few-shot"])
+    parser.add_argument("--prompt-mode", default="zero-shot")
     parser.add_argument("--max-new-tokens", type=int, default=256)
-    parser.add_argument("--max-samples", type=int, default=None, help="Subset size (None = full)")
-    parser.add_argument("--output-dir", type=str, default=None, help="Results directory")
-    parser.add_argument("--force-rerun", action="store_true", help="Ignore checkpoints, start fresh")
+    parser.add_argument("--max-samples", type=int, default=50)
+    parser.add_argument("--method", default="all", choices=["baseline", "v1", "v2", "all"])
+    parser.add_argument("--output-dir", type=str, default=None)
+    parser.add_argument("--force-rerun", action="store_true")
     args = parser.parse_args()
 
-    # ── Output directory ────────────────────────────────────────────────
+    # Output directory
     if args.output_dir:
-        output_dir = Path(args.output_dir)
+        output_base = Path(args.output_dir)
     else:
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        output_dir = Path("results") / "type_oracle_experiment" / timestamp
-    output_dir.mkdir(parents=True, exist_ok=True)
+        output_base = Path("results") / "final_experiment" / timestamp
+    output_base.mkdir(parents=True, exist_ok=True)
 
-    # ── Attention implementation ────────────────────────────────────────
+    # GPU / attention
     has_a100 = False
     flash_attn_installed = False
     if torch.cuda.is_available():
@@ -189,18 +437,17 @@ def main():
             pass
     else:
         gpu_name = "None"
-
     attn_impl = "flash_attention_2" if (has_a100 and flash_attn_installed) else "sdpa"
 
-    # ── Save config ─────────────────────────────────────────────────────
+    # Config
     config = {
         "model_path": args.model_path, "data_path": args.data_path,
-        "dataset": args.dataset, "split": args.split, "index_len": args.index_len,
+        "datasets": args.datasets, "split": args.split, "index_len": args.index_len,
         "k": args.k, "gen_mode": args.gen_mode, "prompt_mode": args.prompt_mode,
         "max_new_tokens": args.max_new_tokens, "max_samples": args.max_samples,
-        "attn_impl": attn_impl, "gpu": gpu_name, "output_dir": str(output_dir),
+        "method": args.method, "attn_impl": attn_impl, "gpu": gpu_name,
     }
-    with open(output_dir / "config.json", "w") as f:
+    with open(output_base / "config.json", "w") as f:
         json.dump(config, f, indent=2)
 
     print("=" * 60)
@@ -210,99 +457,7 @@ def main():
         print(f"  {k:<20} {v}")
     print("=" * 60)
 
-    # ── Load dataset ────────────────────────────────────────────────────
-    dataset = load_dataset(f"{args.data_path}/{args.dataset}", split=args.split)
-    print(f"Full test set: {len(dataset)} questions")
-    if args.max_samples and args.max_samples < len(dataset):
-        dataset = dataset.select(range(args.max_samples))
-        print(f"Subsampled to {len(dataset)} questions")
-
-    # ── Phase 1: SIR/FNR evaluation ────────────────────────────────────
-    sir_path = output_dir / "sir_fnr_metrics.json"
-    if sir_path.exists() and not args.force_rerun:
-        print(f"\nLoading existing SIR/FNR from {sir_path}")
-        with open(sir_path) as f:
-            sir_metrics = json.load(f)
-    else:
-        print(f"\n{'=' * 60}")
-        print("Phase 1: SIR/FNR Evaluation (CPU-only)")
-        print(f"{'=' * 60}")
-
-        total_before = total_after = 0
-        total_range_blocked = total_type_blocked = 0
-        n_range_fn = n_type_fn = 0
-        total_gold = 0
-        skipped = 0
-
-        t0 = time.time()
-        for i, d in enumerate(dataset):
-            try:
-                oracle = TypeOracle.from_graph(d["graph"])
-                ans_types = oracle.infer_answer_types(d["question"])
-                g = utils.build_graph(d["graph"], undirected=False)
-                entities = d.get("q_entity", [])
-
-                if entities:
-                    paths_list = utils.dfs(g, entities, args.index_len)
-                    kept = []
-                    for p in paths_list:
-                        admit = True
-                        for _, rel, tail in p:
-                            if not oracle.range_gate(rel, tail):
-                                total_range_blocked += 1
-                                admit = False
-                                break
-                        if admit:
-                            terminal = p[-1][2]
-                            if not oracle.type_gate(terminal, ans_types, len(p), args.index_len):
-                                total_type_blocked += 1
-                                admit = False
-                        if admit:
-                            kept.append(p)
-                    total_before += len(paths_list)
-                    total_after += len(kept)
-                else:
-                    skipped += 1
-
-                truth_paths = utils.get_truth_paths(d["q_entity"], d["a_entity"], g)
-                for p in truth_paths:
-                    if not p:
-                        continue
-                    total_gold += 1
-                    if any(not oracle.range_gate(rel, tail) for _, rel, tail in p):
-                        n_range_fn += 1
-                    if not oracle.type_gate(p[-1][2], ans_types, len(p), args.index_len):
-                        n_type_fn += 1
-            except Exception as e:
-                print(f"  Skipping {i}: {e}")
-                skipped += 1
-
-            if (i + 1) % 25 == 0:
-                print(f"  {i + 1}/{len(dataset)} ({time.time() - t0:.1f}s)")
-
-        elapsed_sir = time.time() - t0
-        pruned = total_before - total_after
-        sir = pruned / max(1, total_before)
-
-        sir_metrics = {
-            "samples": len(dataset), "skipped": skipped,
-            "total_paths_raw": total_before, "total_paths_filtered": total_after,
-            "pruned": pruned, "sir": round(sir, 4),
-            "sir_type": round(total_type_blocked / max(1, total_before), 4),
-            "sir_traj": round(total_range_blocked / max(1, total_before), 4),
-            "gold_paths": total_gold,
-            "fnr_type": round(n_type_fn / max(1, total_gold), 4),
-            "fnr_range": round(n_range_fn / max(1, total_gold), 4),
-            "elapsed_s": round(elapsed_sir, 1),
-        }
-
-        print(f"\nSIR: {sir_metrics['sir']}  |  FNR_type: {sir_metrics['fnr_type']}  |  FNR_range: {sir_metrics['fnr_range']}")
-        print(f"Time: {elapsed_sir:.1f}s")
-
-        with open(sir_path, "w") as f:
-            json.dump(sir_metrics, f, indent=2)
-
-    # ── Load model ──────────────────────────────────────────────────────
+    # Load model
     print(f"\nLoading {args.model_path}...")
     import argparse as _argparse
     LLM = get_registed_model(args.model_path)
@@ -327,186 +482,53 @@ def main():
         model.tokenizer, args.prompt_mode, index_path_length=args.index_len
     )
 
-    # ── Phase 2: TypeOracle-filtered decoding ──────────────────────────
-    filtered_path = output_dir / "predictions_filtered.jsonl"
-    processed_filtered = set() if args.force_rerun else load_processed_ids(filtered_path)
-    fout_f = open(filtered_path, "a" if processed_filtered else "w")
+    # Conditions to run
+    conditions = {
+        "baseline": ["GCR_Baseline"],
+        "v1": ["DCA_v1_Static"],
+        "v2": ["DCA_v2_Dynamic"],
+        "all": ["GCR_Baseline", "DCA_v1_Static", "DCA_v2_Dynamic"],
+    }[args.method]
 
-    print(f"\n{'=' * 60}")
-    print(f"Phase 2: TypeOracle-Filtered Decoding ({len(dataset)} questions)")
-    print(f"{'=' * 60}")
+    # Run per dataset
+    all_summary = {}
 
-    n_done = n_empty = 0
-    t0 = time.time()
+    for ds_name in args.datasets:
+        print(f"\n{'#' * 60}")
+        print(f"  DATASET: {ds_name}")
+        print(f"{'#' * 60}")
 
-    for i, d in enumerate(dataset):
-        qid = d["id"]
-        if qid in processed_filtered:
-            continue
+        dataset = load_dataset(f"{args.data_path}/{ds_name}", split=args.split)
+        if args.max_samples and args.max_samples < len(dataset):
+            dataset = dataset.select(range(args.max_samples))
+        print(f"  Samples: {len(dataset)}")
 
-        oracle = TypeOracle.from_graph(d["graph"])
-        trie, all_paths, filtered = build_filtered_trie(
-            model.tokenizer, d, args.index_len, oracle
-        )
+        ds_dir = output_base / ds_name
+        ds_dir.mkdir(exist_ok=True)
 
-        if trie is None:
-            result = {
-                "id": qid, "question": d["question"],
-                "prediction": [], "ground_truth": d["answer"],
-                "ground_truth_paths": [],
-                "n_paths_all": len(all_paths), "n_paths_filtered": 0,
-                "mode": "typeoracle_filtered",
-            }
-            fout_f.write(json.dumps(result) + "\n")
-            fout_f.flush()
-            processed_filtered.add(qid)
-            n_done += 1
-            n_empty += 1
-            continue
+        for cond in conditions:
+            print(f"\n  Running {cond}...")
+            metrics = run_condition(model, input_builder, dataset, cond, ds_dir, args.force_rerun)
+            all_summary[(ds_name, cond)] = metrics
 
-        try:
-            prediction, ground_paths = run_constrained_decoding(model, input_builder, d, trie)
-        except Exception as e:
-            print(f"  [{i}] Error: {e}")
-            prediction = None
+    # Final comparison table
+    print(f"\n{'=' * 70}")
+    print("FINAL RESULTS")
+    print(f"{'=' * 70}")
+    print(f"{'Dataset':<15} {'Condition':<20} {'N':<6} {'Hits@1':<8} {'Hit%':<8} {'Time':<8}")
+    print("-" * 70)
+    for (ds, cond), m in all_summary.items():
+        print(f"{ds:<15} {cond:<20} {m['n']:<6} {m['hits']:<8} {m['hit_at_1']:<8} {m['time_s']:<8}")
+        if "reduction_pct" in m:
+            print(f"{'':>15} (paths: {m['total_paths_filtered']}/{m['total_paths_all']}, -{m['reduction_pct']}%)")
+    print("=" * 70)
 
-        result = {
-            "id": qid, "question": d["question"],
-            "prediction": prediction or [], "ground_truth": d["answer"],
-            "ground_truth_paths": ground_paths,
-            "n_paths_all": len(all_paths), "n_paths_filtered": len(filtered),
-            "mode": "typeoracle_filtered",
-        }
-        fout_f.write(json.dumps(result) + "\n")
-        fout_f.flush()
-        processed_filtered.add(qid)
-        n_done += 1
+    # Save summary
+    summary_out = {f"{ds}|{cond}": m for (ds, cond), m in all_summary.items()}
+    with open(output_base / "summary.json", "w") as f:
+        json.dump(summary_out, f, indent=2)
 
-        if n_done % 10 == 0:
-            elapsed = time.time() - t0
-            rate = n_done / elapsed if elapsed > 0 else 0
-            print(f"  [{n_done}/{len(dataset)}] {rate:.2f} q/s | {elapsed:.0f}s")
-
-    fout_f.close()
-    elapsed_filtered = time.time() - t0
-    print(f"Done: {n_done} questions ({n_empty} empty) in {elapsed_filtered:.1f}s")
-
-    # ── Phase 3: Unfiltered baseline decoding ──────────────────────────
-    unfiltered_path = output_dir / "predictions_unfiltered.jsonl"
-    processed_unfiltered = set() if args.force_rerun else load_processed_ids(unfiltered_path)
-    fout_u = open(unfiltered_path, "a" if processed_unfiltered else "w")
-
-    print(f"\n{'=' * 60}")
-    print(f"Phase 3: Unfiltered Baseline Decoding ({len(dataset)} questions)")
-    print(f"{'=' * 60}")
-
-    n_done_u = 0
-    t0 = time.time()
-
-    for i, d in enumerate(dataset):
-        qid = d["id"]
-        if qid in processed_unfiltered:
-            continue
-
-        trie, all_paths = build_unfiltered_trie(model.tokenizer, d, args.index_len)
-
-        if trie is None:
-            result = {
-                "id": qid, "question": d["question"],
-                "prediction": [], "ground_truth": d["answer"],
-                "ground_truth_paths": [],
-                "n_paths_all": 0, "mode": "unfiltered",
-            }
-            fout_u.write(json.dumps(result) + "\n")
-            fout_u.flush()
-            processed_unfiltered.add(qid)
-            n_done_u += 1
-            continue
-
-        try:
-            prediction, ground_paths = run_constrained_decoding(model, input_builder, d, trie)
-        except Exception as e:
-            print(f"  [{i}] Error: {e}")
-            prediction = None
-
-        result = {
-            "id": qid, "question": d["question"],
-            "prediction": prediction or [], "ground_truth": d["answer"],
-            "ground_truth_paths": ground_paths,
-            "n_paths_all": len(all_paths), "mode": "unfiltered",
-        }
-        fout_u.write(json.dumps(result) + "\n")
-        fout_u.flush()
-        processed_unfiltered.add(qid)
-        n_done_u += 1
-
-        if n_done_u % 10 == 0:
-            elapsed = time.time() - t0
-            rate = n_done_u / elapsed if elapsed > 0 else 0
-            print(f"  [{n_done_u}/{len(dataset)}] {rate:.2f} q/s | {elapsed:.0f}s")
-
-    fout_u.close()
-    elapsed_unfiltered = time.time() - t0
-    print(f"Done: {n_done_u} questions in {elapsed_unfiltered:.1f}s")
-
-    # ── Phase 4: Comparison ────────────────────────────────────────────
-    print(f"\n{'=' * 60}")
-    print("Phase 4: Comparison")
-    print(f"{'=' * 60}")
-
-    def load_preds(path):
-        results = []
-        if os.path.exists(path):
-            with open(path) as f:
-                for line in f:
-                    try:
-                        results.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        pass
-        return results
-
-    preds_f = load_preds(filtered_path)
-    preds_u = load_preds(unfiltered_path)
-
-    n_f = len(preds_f)
-    n_u = len(preds_u)
-    hits_f = compute_hits(preds_f)
-    hits_u = compute_hits(preds_u)
-
-    total_all = sum(p.get("n_paths_all", 0) for p in preds_f)
-    total_filtered = sum(p.get("n_paths_filtered", 0) for p in preds_f)
-    reduction = (1 - total_filtered / max(1, total_all)) * 100
-
-    comparison = {
-        "filtered": {
-            "n": n_f, "hits": hits_f,
-            "hit_at_1": round(hits_f / max(1, n_f) * 100, 1),
-            "avg_paths": round(total_filtered / max(1, n_f), 1),
-            "time_s": round(elapsed_filtered, 1),
-        },
-        "unfiltered": {
-            "n": n_u, "hits": hits_u,
-            "hit_at_1": round(hits_u / max(1, n_u) * 100, 1),
-            "avg_paths": round(total_all / max(1, n_u), 1),
-            "time_s": round(elapsed_unfiltered, 1),
-        },
-        "path_reduction_pct": round(reduction, 1),
-        "sir_fnr_metrics": sir_metrics,
-    }
-
-    print(f"\n{'Metric':<28} {'Filtered':<12} {'Unfiltered':<12}")
-    print("-" * 52)
-    print(f"{'Questions':<28} {n_f:<12} {n_u:<12}")
-    print(f"{'Hits@1':<28} {hits_f:<12} {hits_u:<12}")
-    print(f"{'Hit@1 (%)':<28} {comparison['filtered']['hit_at_1']:<12} {comparison['unfiltered']['hit_at_1']:<12}")
-    print(f"{'Avg paths/question':<28} {comparison['filtered']['avg_paths']:<12} {comparison['unfiltered']['avg_paths']:<12}")
-    print(f"{'Time (s)':<28} {comparison['filtered']['time_s']:<12} {comparison['unfiltered']['time_s']:<12}")
-    print(f"\nPath reduction: {reduction:.1f}%")
-
-    with open(output_dir / "comparison.json", "w") as f:
-        json.dump(comparison, f, indent=2)
-
-    print(f"\nResults saved to {output_dir}")
+    print(f"\nResults saved to {output_base}")
 
 
 if __name__ == "__main__":

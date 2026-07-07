@@ -1,47 +1,41 @@
 #!/usr/bin/env bash
-# run.sh — one-shot entry point for the TypeOracle experiment.
+# run.sh — one-shot entry point for the DCA-Trie experiment.
 #
 # Usage:
-#   bash experiments/type_oracle_full/run.sh                     # quick test (100 samples)
+#   bash experiments/type_oracle_full/run.sh                     # 50 samples, both datasets, all methods
 #   bash experiments/type_oracle_full/run.sh --full               # full test set
-#   bash experiments/type_oracle_full/run.sh --flash-attn         # install flash-attn from source
-#   bash experiments/type_oracle_full/run.sh --output-dir /tmp/r  # custom output dir
+#   bash experiments/type_oracle_full/run.sh --method v1          # v1 only
+#   bash experiments/type_oracle_full/run.sh --datasets RoG-webqsp
+#   bash experiments/type_oracle_full/run.sh --max-samples 10
 #
-# All extra arguments are forwarded to run.py after the script's own flags are consumed.
+# All extra arguments are forwarded to run.py.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# ── Parse script-level flags ───────────────────────────────────────────
-INSTALL_FLASH=false
 EXTRA_ARGS=()
 
+# Default to 50 samples unless --full or --max-samples is passed
+has_max_samples=false
 for arg in "$@"; do
     case "$arg" in
-        --flash-attn) INSTALL_FLASH=true ;;
-        *)            EXTRA_ARGS+=("$arg") ;;
-    esac
-done
-
-# Default to 100 samples unless --full or --max-samples is passed
-has_max_samples=false
-for arg in "${EXTRA_ARGS[@]}"; do
-    case "$arg" in
-        --max-samples) has_max_samples=true ;;
+        --max-samples|--full) has_max_samples=true ;;
     esac
 done
 
 if [ "$has_max_samples" = false ]; then
-    EXTRA_ARGS+=("--max-samples" "100")
+    EXTRA_ARGS+=("--max-samples" "50")
 fi
 
-# ── Setup ──────────────────────────────────────────────────────────────
-echo "Running setup..."
-bash "$SCRIPT_DIR/setup.sh" $([ "$INSTALL_FLASH" = true ] && echo "--flash-attn")
+# Forward all args
+EXTRA_ARGS+=("$@")
 
-# ── Run experiment ─────────────────────────────────────────────────────
+# Setup
+echo "Running setup..."
+bash "$SCRIPT_DIR/setup.sh"
+
+# Run
 echo ""
 echo "Starting experiment..."
 python "$SCRIPT_DIR/run.py" "${EXTRA_ARGS[@]}"
