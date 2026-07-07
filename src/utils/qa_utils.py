@@ -562,15 +562,18 @@ def eval_path_result_w_ans(predict_file, cal_f1=True, topk=-1):
                     + "\n"
                 )
 
-    if len(f1_list) > 0:
-        result_str = f"Accuracy: {sum(acc_list) * 100 / len(acc_list)} Hit: {sum(hit_list) * 100 / len(hit_list)} F1: {sum(f1_list) * 100 / len(f1_list)} Precision: {sum(precission_list) * 100 / len(precission_list)} Recall: {sum(recall_list) * 100 / len(recall_list)} Path F1: {sum(path_f1_list) * 100 / len(path_f1_list)} Path Precision: {sum(path_precission_list) * 100 / len(path_precission_list)} Path Recall: {sum(path_recall_list) * 100 / len(path_recall_list)} Path Answer F1: {sum(path_ans_f1_list) * 100 / len(path_ans_f1_list)} Path Answer Precision: {sum(path_ans_precission_list) * 100 / len(path_ans_precission_list)} Path Answer Recall: {sum(path_ans_recall_list) * 100 / len(path_ans_recall_list)}"
+    if len(acc_list) > 0:
+        if len(f1_list) > 0:
+            result_str = f"Accuracy: {sum(acc_list) * 100 / len(acc_list)} Hit: {sum(hit_list) * 100 / len(hit_list)} F1: {sum(f1_list) * 100 / len(f1_list)} Precision: {sum(precission_list) * 100 / len(precission_list)} Recall: {sum(recall_list) * 100 / len(recall_list)} Path F1: {sum(path_f1_list) * 100 / len(path_f1_list)} Path Precision: {sum(path_precission_list) * 100 / len(path_precission_list)} Path Recall: {sum(path_recall_list) * 100 / len(path_recall_list)} Path Answer F1: {sum(path_ans_f1_list) * 100 / len(path_ans_f1_list)} Path Answer Precision: {sum(path_ans_precission_list) * 100 / len(path_ans_precission_list)} Path Answer Recall: {sum(path_ans_recall_list) * 100 / len(path_ans_recall_list)}"
+        else:
+            result_str = (
+                "Accuracy: "
+                + str(sum(acc_list) * 100 / len(acc_list))
+                + " Hit: "
+                + str(sum(hit_list) * 100 / len(hit_list))
+            )
     else:
-        result_str = (
-            "Accuracy: "
-            + str(sum(acc_list) * 100 / len(acc_list))
-            + " Hit: "
-            + str(sum(hit_list) * 100 / len(hit_list))
-        )
+        result_str = "Accuracy: 0.0 Hit: 0.0"
     print(result_str)
     result_name = "eval_result_top_{topk}.txt" if topk > 0 else "eval_result.txt"
     eval_result_path = predict_file.replace("predictions.jsonl", result_name)
