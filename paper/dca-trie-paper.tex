@@ -53,44 +53,26 @@
 \maketitle
 
 \begin{abstract}
-	Large language models hallucinate on knowledge graph question answering (KGQA), generating fluent reasoning paths that do not exist in the knowledge graph. Graph-constrained decoding (GCR) addresses this by building a prefix tree of all structurally valid KG paths and masking out invalid tokens during generation. But for a 3-hop question on Freebase, this trie contains up to 	24,000 valid paths, all structurally sound, only one correct. The LLM must choose among thousands of valid-but-irrelevant options using parametric knowledge, the same mechanism that produces hallucinations.
-
-	We present DCA-Trie, which replaces this loose structural constraint with a tight symbolic oracle that uses the KG's own ontological metadata to prune irrelevant paths before they reach the decoder. 	Two deterministic set-containment checks, an answer type gate and a property range gate, remove paths whose entity types or relation ranges are incompatible with the question. No embeddings, no thresholds, no GPU.
-
-	Empirically, on the full WebQSP test set (1,628 questions), the two gates jointly prune 14.5\% of all candidate paths while retaining 96.7\% of gold-truth paths (FNR $< 3.3\%$). The type gate alone accounts for 	10.6\% of pruning, approximately 436,000 paths eliminated through pure ontology lookups. The approach admits formal guarantees: monotonic containment within the GCR path set (Theorem~\ref{thm:monotonicity}) and a union-bound false negative rate (Theorem~\ref{thm:fnr}). A machine-checked proof in Lean 4 (3,298 verification jobs, zero errors) accompanies the implementation.
+	Large language models hallucinate on knowledge graph question answering, generating reasoning paths that do not exist in the knowledge graph. Graph-constrained decoding (GCR) addresses this by constraining the decoder to structurally valid KG paths, but for a 3-hop question on Freebase, this yields up to 24,000 valid paths, all structurally sound, only one correct. The decoder must choose among them using parametric knowledge, which prior work has linked to hallucination. We identify \textbf{constraint quality} as a missing design dimension: existing oracles guarantee structural validity but do not measure whether the constraint set is tight enough to be useful. We formalize constraint oracles and oracle tightness, and instantiate the concept with a symbolic oracle that uses KG ontology metadata (entity types and relation ranges) to prune irrelevant paths. Two deterministic set-containment checks prune 14.5\% of candidate paths on the full WebQSP test set (1,628 questions) while retaining 96.7\% of gold-truth paths (FNR $< 3.3\%$). The oracle requires no learned components, no tunable thresholds, and no GPU. A machine-checked Lean 4 proof (3,298 verification jobs, zero errors) confirms that faithfulness is preserved.
 \end{abstract}
 
 \section{Introduction}
 \label{sec:introduction}
 
-Large language models (LLMs) generate fluent reasoning chains for knowledge graph question answering (KGQA), but they regularly fabricate steps not present in the knowledge graph. At each autoregressive step, the model selects the next token from a probability distribution conditioned only on its learned parameters and the tokens generated so far, with no checkpoint against an external source of truth~\citep{brown2020gpt3,ji2023survey}. If an incorrect token enters the sequence, every subsequent step conditions on it, propagating the error fluently through the output~\citep{huang2023hallucination}. Scaling model size does not resolve this: larger models hallucinate differently, not less~\citep{lin2022truthfulqa,kandpal2023large}.
+Large language models have demonstrated impressive reasoning abilities across a range of tasks~\citep{brown2020gpt3,wei2022cot}, but they still struggle with faithful reasoning on knowledge-intensive tasks due to knowledge gaps and hallucinations~\citep{huang2023hallucination,ji2023survey}. Knowledge graph question answering (KGQA) makes this weakness acute: answering complex questions requires traversing chains of verified triples, and an unconstrained LLM must navigate this space using only parametric memory~\citep{lan2022kgqa}.
 
-KGQA makes this weakness acute. A knowledge graph encodes facts as 	verified triples, (\textit{Marie Curie}, \textit{award\_received}, \textit{Nobel Prize in Physics}),and answering complex questions requires traversing chains of these triples~\citep{bollacker2008freebase,lan2022kgqa}. On WebQSP~\citep{yih2016websqp} and ComplexWebQuestions~\citep{talmor2018cwq}, a three-hop question can correspond to tens of thousands of structurally valid graph paths, and an unconstrained LLM must navigate this space using only parametric memory.
+Graph-constrained decoding (GCR) addresses this by building a prefix tree of all structurally valid KG paths and masking invalid tokens during generation~\citep{luo2025-graph-constrained-reasoning,li2024-decoding-on-graphs}. This eliminates structural hallucinations: every output path is verifiable against the graph. However, for a 3-hop question on Freebase, GCR's trie contains up to 24,000 valid paths, all structurally sound, only one correct. The decoder must choose among them using parametric knowledge, which prior work has linked to hallucination~\citep{brown2020gpt3,huang2023hallucination}.
 
-\paragraph{Constrained decoding.}
-One line of work addresses hallucination through \emph{constrained decoding}: a prefix tree (trie) of all KG-valid paths is built offline, and at every decoding step, the LLM's logits are masked so that only tokens corresponding to valid continuations are considered. Graph-Constrained Reasoning (\textbf{GCR})~\citep{luo2025-graph-constrained-reasoning} and Decoding over Graphs (\textbf{DoG})~\citep{li2024-decoding-on-graphs} 	guarantee zero structural hallucinations, every generated path exists in the KG. GCR achieves 92.6 Hits@1 on WebQSP with verified 100\% structural faithfulness.
+The issue is not that many valid paths exist. The issue is that every valid path is treated as equally admissible. Structural validity is a necessary but insufficient guarantee for useful constraint sets. This raises the question of what additional signal can be used to distinguish relevant from irrelevant paths before they reach the decoder.
 
-\paragraph{The permissiveness problem.}
-However, structural validity is a weak constraint. GCR's trie is constructed once from graph topology and question entities only, without any consideration of what the question actually means. The valid token set is therefore identical at step 1 and step 10. On multi-hop questions this creates excessive permissiveness: thousands of structurally valid but semantically irrelevant paths remain in the constraint set, and the LLM must filter among them 	using parametric knowledge, reintroducing the internal-memory reliance that constrained decoding was designed to eliminate. DoG updates the trie step-wise, but expansion is guided by graph topology alone; question semantics play no role.
+The knowledge graph itself provides such signal. Entity types (via \url{common.topic.notable_types}) and relation ranges (via rdf-schema\#range) are stored as RDF triples alongside domain facts. Every relation in Freebase declares its expected object type; every notable entity has a type annotation. This metadata is ground-truth, machine-readable, and requires no learned component to exploit. Prior work on KG-constrained decoding has ignored it.
 
-\subsection{The core insight}
-
-The KG already stores entity types (via \texttt{common.topic.notable\_types}) and relation ranges (via \texttt{rdf-schema\#range}) as RDF triples alongside domain facts. Every relation in Freebase declares its expected object type. Every notable entity has a type annotation. These are ground-truth, machine-readable, and require no learned component to exploit. This metadata directly answers the question ``should this path be in the 	constraint set?''--it is free signal that prior methods ignored.
-
-\subsection{Contributions}
-
+We make three contributions:
 \begin{enumerate}
-	\item \textbf{DCA-Trie}, a framework that upgrades the static structural oracle to a dynamic, context-aware oracle by incorporating KG ontology metadata during path enumeration.
-	\item \textbf{Three oracle designs} progressing from embedding-based (cosine similarity) to fully symbolic (ontology lookups), the last requiring no encoder, no threshold, and no GPU.
-	\item \textbf{Two symbolic gates}, an answer type gate and a property range gate, that are each \(O(1)\) set lookups, deterministic, and conservative by default.
-	\item \textbf{Formal guarantees}: monotonic containment of the filtered path set (Theorem~\ref{thm:monotonicity}) and a union-bound false negative rate (Theorem~\ref{thm:fnr}).
-	\item \textbf{A machine-checked Lean 4 proof} (3,298 verification jobs, zero errors) establishing faithfulness of the constrained decoding procedure.
-	\item \textbf{Empirical validation} on the full WebQSP test set: 14.5\% path pruning at 3.3\% FNR, with zero compute cost beyond set lookups.
+	\item We formalize \textbf{constraint quality} as a measurable property of constraint sets, defining constraint oracles and oracle tightness (Section~\ref{sec:prelim}).
+	\item We introduce an ontology-guided constraint oracle consisting of two deterministic \(O(1)\) set-containment checks, an answer type gate and a property range gate, that prune irrelevant paths while preserving faithfulness (Section~\ref{sec:method}).
+	\item We validate empirically on the full WebQSP test set (1,628 questions): 14.5\% path pruning at 3.3\% FNR, with zero compute cost beyond set lookups (Section~\ref{sec:experiments}).
 \end{enumerate}
-
-\subsection{Outline}
-
-Section~\ref{sec:prelim} establishes notation and reviews GCR. Section~\ref{sec:method} develops the three oracle designs. Section~\ref{sec:analysis} proves the formal properties. Section~\ref{sec:impl} describes the implementation. Section~\ref{sec:experiments} presents experimental results. Section~\ref{sec:related} discusses related work, and Section~\ref{sec:conclusion} concludes.
 
 \section{Preliminaries}
 \label{sec:prelim}
@@ -118,7 +100,7 @@ Formally, GCR defines the admissible token set at step \(t\) as:
 	W^{\text{GCR}}_{\text{val}}(t) = f(\mathcal{G}, E_q) \quad \forall t
 \]
 
-The constraint is entirely topological: a path is admissible iff it exists in the KG. No semantic signal from \(q\) is used beyond entity linking.
+The constraint is entirely topological: a path is admissible iff it exists in the KG. No answer-type signal from \(q\) is used beyond entity linking.
 
 \subsection{Problem statement}
 
@@ -135,84 +117,60 @@ where \(\mathcal{Q}\) is the question space and \(\mathcal{O}\) is the KG ontolo
 	\phi(p^*) & = 1 \quad                                        & \text{(recall)}
 \end{align}
 
-\subsection{The DCA-Trie principle: dynamic context-awareness}
+\subsection{Constraint quality}
 
-GCR defines the admissible token set as a function of graph structure and question entities alone:
+We define the vocabulary for reasoning about constraint sets.
+
+\begin{definition}[Constraint Oracle]
+	A \textbf{constraint oracle} is a function \(O: \mathcal{P} \to \{0, 1\}\) that assigns each candidate path a binary admission decision. \(O(p) = 1\) means the path is admitted to the constraint set; \(O(p) = 0\) means it is excluded.
+\end{definition}
+
+\begin{definition}[Oracle Tightness]
+	Given a candidate path set \(\mathcal{P}\) and an oracle \(O\), the \textbf{oracle tightness} is:
+	\[
+		\text{tightness}(O) = 1 - \frac{|\{p \in \mathcal{P} : O(p) = 1\}|}{|\mathcal{P}|}
+	\]
+	subject to the recall constraint \(O(p^*_q) = 1\) for all gold-truth paths \(p^*_q\). Tightness measures the fraction of candidate paths excluded by the oracle. A tightness of 0 means the oracle admits everything; a tightness of 1 means it admits nothing.
+\end{definition}
+
+\begin{definition}[Structural Oracle]
+	The \textbf{structural oracle} \(O_{\text{GCR}}\) admits all KG-valid paths: \(O_{\text{GCR}}(p) = 1\) iff \(p \in \mathcal{P}_{\text{GCR}}\). By construction, \(\text{tightness}(O_{\text{GCR}}) = 0\). This is the oracle used by GCR and DoG.
+\end{definition}
+
+\begin{definition}[Ontology Oracle]
+	An \textbf{ontology oracle} \(O_{\text{ont}}\) admits a path iff it passes type-based filtering using KG metadata: entity types for terminal nodes, relation ranges for intermediate hops. We instantiate two variants (Section~\ref{sec:method}).
+\end{definition}
+
+The design space for constraint oracles forms a hierarchy:
 
 \[
-	W^{\text{GCR}}_{\text{val}}(t) = f(\mathcal{G}, E_q) \quad \forall t
+	O_{\text{GCR}} \subseteq O_{\text{ont}} \subseteq O_{\text{question}} \subseteq O_{\text{useful}}
 \]
 
-DCA-Trie expands this to incorporate question semantics, KG ontology metadata, and generation state:
+where each level adds a stricter admission criterion. We instantiate the second level.
 
-\[
-	W^{\text{DCA}}_{\text{val}}(t) = f(\mathcal{G}, E_q, q, p_{1:t-1}, \mathcal{O})
-\]
-
-where \(q\) is the question text, \(p_{1:t-1}\) is the partial generation so far, and \(\mathcal{O}\) is the KG ontology (entity types and relation ranges). This is what we mean by \emph{dynamic context-aware}: the constraint set adapts to what the question asks, what the KG knows about types, and what the decoder has already committed.
-
-The expansion from \(f(\mathcal{G}, E_q)\) to \(f(\mathcal{G}, E_q, q, p_{1:t-1}, \mathcal{O})\) has two dimensions:
-
-\begin{itemize}
-	\item \textbf{Context-aware} (uses \(q\) and \(\mathcal{O}\)): The type gate answers ``should this entity be a terminal node?'' by checking \(\text{types}(e) \cap \mathcal{T}(q)\). The range gate answers ``does this relation connect compatible types?'' by checking \(\text{types}(e') \cap \text{range}(r)\). Both queries use KG ontology metadata that GCR ignores.
-	\item \textbf{Dynamic} (uses \(p_{1:t-1}\)): In the stepwise variant (DCA-Trie v2), the constraint set is rebuilt after each generation step. The committed entity \(e_t\) becomes the new seed, and only its neighbors that pass the gates are admitted. The oracle sees the reasoning in progress, not just the question.
-\end{itemize}
-
-\section{Method: Three Oracle Designs}
+\section{Method: Ontology-Guided Constraint Oracle}
 \label{sec:method}
 
-We develop three increasingly sophisticated instantiations of the DCA-Trie framework, tracking the progression from embedding-based to purely symbolic filtering.
+\subsection{Design space}
 
-\subsection{Approach 1: Cosine similarity oracle}
+A constraint oracle must score or filter candidate paths. The design space ranges from learned embeddings to symbolic metadata:
 
-The first design scores each candidate path by cosine similarity to the question:
+\paragraph{Embedding-based oracles.}
+The simplest approach scores each candidate path by cosine similarity to the question: \(\cos(E(p), E(q)) \geq \tau\), where \(E(\cdot)\) is a sentence transformer~\citep{reimers2019sbert}. This requires an encoder forward pass per candidate, a tunable threshold, and a GPU. At \(\tau = 0.25\), we observed that 84\% of queries produced empty path sets, indicating that the threshold is too aggressive for practical use. A decomposed variant breaks the score into relational relevance, type compatibility, and trajectory components, but still requires the encoder and threshold.
 
-\[
-	\text{score}(p, q) = \cos\bigl(E(p), E(q)\bigr) \geq \tau
-\]
+\paragraph{Symbolic oracle.}
+The alternative is to abandon learned scoring entirely and use deterministic set-containment checks against KG metadata. This requires no encoder, no threshold, no GPU. The metadata is already present in the KG; it simply needs to be looked up. We focus on this design.
 
-where \(E(\cdot)\) is the all-MiniLM-L6-v2 sentence transformer~\citep{reimers2019sbert} encoding into \(\mathbb{R}^{384}\), and \(\tau\) is a tunable threshold. Paths below \(\tau\) are pruned.
+\subsection{The ontology oracle}
 
-\begin{algorithm}[H]
-	\caption{Cosine DCA-Trie construction}
-	\begin{algorithmic}[1]
-		\Require Graph \(\mathcal{G}\), question \(q\), topic entity \(E_q\), hop limit \(L\), encoder \(E\), threshold \(\tau\)
-		\State \(P \gets \text{BFS}(\mathcal{G}, E_q, L)\)
-		\State \(u_q \gets E(q)\)
-		\State \(P_{\text{filtered}} \gets \varnothing\)
-		\For{\(p \in P\)}
-		\State \(u_p \gets E(\text{serialize}(p))\)
-		\If{\(\cos(u_q, u_p) \geq \tau\)}
-		\State \(P_{\text{filtered}} \gets P_{\text{filtered}} \cup \{p\}\)
-		\EndIf
-		\EndFor
-		\State \Return \(\text{BuildTrie}(P_{\text{filtered}})\)
-	\end{algorithmic}
-\end{algorithm}
+The KG stores entity types (via \url{common.topic.notable_types}) and relation ranges (via rdf-schema\#range) as RDF triples alongside domain facts. Every relation in Freebase declares its expected object type. Every notable entity has a type annotation. These are ground-truth, machine-readable, and require no learned component to exploit.
 
-\paragraph{Weaknesses.}
-(1)~A single cosine score cannot distinguish \emph{why} a path is relevant. (2)~Every candidate requires a full encoder forward pass. (3)~The threshold \(\tau\) is dataset-dependent and must be tuned per KG. (4)~At \(\tau = 0.25\), we observed 84\% of queries produced 	empty path sets, a catastrophic failure mode where the oracle is too aggressive.
-
-\subsection{Approach 2: Decomposed oracle}
-
-The second design decomposes the score into three components:
-
-\[
-	\text{score}(e_t, r, e' \mid q) = \rho_r(r, q) \cdot \rho_e(e', q) \cdot \rho_{\text{traj}}(r, e', q)
-\]
-
-where \(\rho_r\) is relational relevance (\(\cos(E(r), E(q_{\text{masked}}))\)), \(\rho_e \in \{0, 1\}\) is a hard type gate, and \(\rho_{\text{traj}}\) is trajectory relevance (\(\cos(E(r \| e'), E(q))\)).
-
-\paragraph{Weaknesses.}
-(1)~Two of three components still require the encoder. (2)~The threshold \(\tau\) persists. (3)~The product amplifies noise: \(\rho_r = 0.6\) and \(\rho_{\text{traj}} = 0.6\) yields 0.36, which may fall below \(\tau\). (4)~The type gate is hand-crafted rather than derived from the KG ontology.
-
-\subsection{Approach 3: Symbolic oracle}
-
-The third design abandons embeddings entirely. It replaces all scoring with deterministic set-containment checks using the KG's own ontology metadata.
+We define two gates that use this metadata to filter paths.
 
 \subsubsection{Gate 1: Answer type gate (terminal hop only)}
 
-Let \(\mathcal{T}(q) \subseteq \mathcal{C}\) be the set of expected answer types inferred from the question (e.g., ``who?'' \(\to\) \{\texttt{Person}\}, ``where?'' \(\to\) \{\texttt{Location}\}):
+Let \(\mathcal{T}(q) \subseteq \mathcal{C}\) be the set of expected answer types inferred from the question. These are \textbf{answer-type hints}, regex-derived expectations like ``who?'' \(\to\) \{\texttt{Person}\}, ``where?'' \(\to\) \{\texttt{Location}\}, not semantic understanding of the question:
 
 \[
 	\text{type\_gate}(e_h, q, h, L) =
@@ -236,7 +194,7 @@ Let \(\mathcal{T}(q) \subseteq \mathcal{C}\) be the set of expected answer types
 	\end{cases}
 \]
 
-Both gates default to conservative (pass) when metadata is absent. This is critical: it bounds the false negative rate while ensuring the oracle never introduces false positives.
+Both gates default to conservative (pass) when metadata is absent. This is critical: it bounds the false negative rate while ensuring the oracle never introduces false positives relative to GCR.
 
 \begin{figure}[t]
 	\centering
@@ -286,12 +244,12 @@ Both gates default to conservative (pass) when metadata is absent. This is criti
 
 The symbolic gates can be applied in two ways, yielding two algorithm variants with different computational profiles.
 
-\paragraph{DCA-Trie v1: static filtering.}
+\paragraph{Static filtering (v1).}
 V1 is an offline, batch algorithm. It enumerates all candidate paths via BFS from the topic entity, filters each complete path through both gates, then builds a single trie from the survivors. The trie is frozen before decoding begins; the LLM operates over a fixed constraint set. This is the same pipeline as GCR, with a pre-filter inserted between path enumeration and trie construction.
 
 The key property is that v1 applies the gates to \emph{complete paths}: the range gate checks every hop, and the type gate checks only the terminal entity. Paths that fail any gate are removed before the trie is built. The construction cost is \(O(|P|)\), where \(|P|\) is the total number of enumerated paths, which grows exponentially with hop depth.
 
-\paragraph{DCA-Trie v2: dynamic stepwise expansion.}
+\paragraph{Dynamic stepwise expansion (v2).}
 V2 eliminates upfront path enumeration. Instead, it expands the trie incrementally during decoding. At each generation step:
 
 \begin{enumerate}
@@ -306,7 +264,7 @@ V2 eliminates upfront path enumeration. Instead, it expands the trie incremental
 V2 is \emph{dynamic} because the constraint set changes at every step: only the neighbors of the entity the LLM actually committed to are admitted, not all reachable paths from the topic entity. The oracle sees the reasoning in progress. V2 is also cheaper: construction cost is \(O(L \cdot d_{\text{avg}})\), where \(d_{\text{avg}} \approx 20\) for Freebase subgraphs, three orders of magnitude less than v1 for practical \(L\).
 
 \begin{algorithm}[H]
-	\caption{DCA-Trie v1: Static symbolic filtering}
+	\caption{Static ontology filtering}
 	\begin{algorithmic}[1]
 		\Require Graph \(\mathcal{G}\), question \(q\), topic entity \(E_q\), hop limit \(L\), oracle \(O\)
 		\State \(P \gets \text{BFS}(\mathcal{G}, E_q, L)\)
@@ -327,7 +285,7 @@ V2 is \emph{dynamic} because the constraint set changes at every step: only the 
 \end{algorithm}
 
 \begin{algorithm}[H]
-	\caption{DCA-Trie v2: Iterative symbolic expansion}
+	\caption{Dynamic stepwise expansion}
 	\begin{algorithmic}[1]
 		\Require Graph \(\mathcal{G}\), question \(q\), topic entity \(E_q\), hop limit \(L\), oracle \(O\)
 		\State \(\mathcal{T}_0 \gets \{E_q\}\)
@@ -391,52 +349,13 @@ Gate operations are \(O(1)\) set lookups with no floating point. V1 construction
 			\node[rectangle, draw=blue!40, densely dotted, rounded corners=5pt, inner sep=8pt, fit={(typegate) (rangegate)}, label={[blue!60, font=\small\bfseries]above:{Symbolic Oracle (no encoder, no GPU)}}] {};
 		\end{scope}
 	\end{tikzpicture}
-	\caption{DCA-Trie system architecture. The two symbolic gates (highlighted) filter paths using KG ontology metadata before trie construction.}
+	\caption{Ontology-guided constraint oracle. The two symbolic gates (highlighted) filter paths using KG ontology metadata before trie construction.}
 	\label{fig:architecture}
 \end{figure}
 
-\section{Theoretical Analysis}
-\label{sec:analysis}
+\subsection{Properties}
 
-\subsection{Faithfulness}
-
-\begin{theorem}[V1 Faithfulness]
-	\label{thm:v1-faithfulness}
-	\sloppy
-	Let \(P_{\text{filtered}} = \textsc{SymbolicFilter}(\text{BFS}(\mathcal{G}, E_q, L), q, O, L)\). For any prefix \(\text{curr\_prefix}\) and any token \(t\), if \(t \in \text{TrieLookup}(\text{BuildTrie}(P_{\text{filtered}}), \text{curr\_prefix})\), then \(\text{curr\_prefix} \oplus t\) corresponds to a valid sequence of triples in \(\mathcal{G}\).
-\end{theorem}
-
-\begin{proof}
-	Every path in \(P_{\text{filtered}}\) is a subset of \(\text{BFS}(\mathcal{G}, E_q, L)\), which contains only valid triples. The trie preserves this property for all prefixes.
-\end{proof}
-
-\subsection{Monotonicity}
-
-\begin{theorem}[Monotonic Chain]
-	\label{thm:monotonicity}
-	Let \(P_{\text{GCR}}\), \(P_{\text{range}}\), and \(P_{\text{filtered}}\) be the path sets admitted by GCR, by the range gate alone, and by both gates, respectively. Then:
-	\[
-		P_{\text{filtered}} \subseteq P_{\text{range}} \subseteq P_{\text{GCR}}
-	\]
-\end{theorem}
-
-\begin{proof}
-	Both gates are conservative: they return \text{True} when metadata is absent. Each gate can only \emph{remove} paths, never add paths not in \(P_{\text{GCR}}\).
-\end{proof}
-
-\subsection{False negative rate bound}
-
-\begin{theorem}[FNR Union Bound]
-	\label{thm:fnr}
-	Let \(p^*_q\) be the ground-truth path for question \(q\). The probability that DCA-Trie excludes \(p^*_q\) is bounded by:
-	\[
-		P(\text{exclude} \mid p^*_q) \leq P(\text{type\_fail}) + P(\text{range\_fail})
-	\]
-\end{theorem}
-
-\begin{proof}
-	By the union bound. Each gate fails only when: (a)~the question provides a type signal; (b)~the entity has known, incompatible type metadata; and (c)~the path is actually correct. In all other configurations, the conservative default passes the path.
-\end{proof}
+The oracle has two key properties. First, since it only removes paths from the GCR path set, the original faithfulness guarantee is preserved by monotonic containment: \(P_{\text{filtered}} \subseteq P_{\text{GCR}}\). Second, the false negative rate is bounded by the union of gate failures, since each gate defaults to conservative (pass) when metadata is absent. A machine-checked Lean 4 proof (3,298 verification jobs, zero errors) confirms both properties.
 
 \section{Implementation}
 \label{sec:impl}
@@ -453,24 +372,17 @@ The type oracle is 586 lines of Python using only the standard library:
 	\item \textbf{Type constants:} 16 Person types, 7 Location types, 9 Organization types, 10 Creative Work types, plus Date, Language, Award, Profession, and Genre types.
 	\item \textbf{Question patterns:} 19 regular expressions mapping keywords to expected answer types.
 	\item \textbf{Relation schema:} 40 Freebase relations organized by domain, each with domain and range constraints.
-	\item \textbf{Metadata extraction:} Entity types from \texttt{common.topic.notable\_types}, \texttt{freebase.type\_hints.included\_types}, and \texttt{freebase.type\_profile.strict\_included\_types}.
+	\item \textbf{Metadata extraction:} Entity types from \url{common.topic.notable_types}, \url{freebase.type_hints.included_types}, and \url{freebase.type_profile.strict_included_types}.
 \end{itemize}
 
 \subsection{Lean 4 formal proof}
 
-The formal verification comprises four theorems checked in Lean 4:
-
-\begin{enumerate}
-	\item \textbf{V1 Faithfulness}: Every token from DCA-Trie v1 is a verified KG member.
-	\item \textbf{V2 Faithfulness}: Stepwise expansion preserves faithfulness by induction.
-	\item \textbf{Monotonicity}: \(P_{\text{filtered}} \subseteq P_{\text{typed}} \subseteq P_{\text{range}} \subseteq P_{\text{GCR}}\).
-	\item \textbf{FNR Union Bound}: As in Theorem~\ref{thm:fnr}.
-\end{enumerate}
-
-3,298 verification jobs, zero errors, zero warnings.
+A machine-checked Lean 4 proof (3,298 verification jobs, zero errors) confirms faithfulness of the constrained decoding procedure: every token admitted by the oracle corresponds to a valid KG triple.
 
 \section{Experiments}
 \label{sec:experiments}
+
+The experiments answer one question: \textbf{What does an ontology-guided oracle buy you?} We measure pruning rate (how many paths excluded), gold-path retention (did we keep the right one), and computational cost.
 
 \subsection{Setup}
 
@@ -497,24 +409,20 @@ The formal verification comprises four theorems checked in Lean 4:
 \subsection{Evaluation metrics}
 
 \begin{enumerate}
-	\item \textbf{Hits@1:} Exact match accuracy on the answer entity.
-	\item \textbf{F1:} Token-level entity overlap between prediction and ground truth.
-	\item \textbf{Structural Irrelevance Rate (SIR):} Measures how many candidate paths are semantically irrelevant to the question (e.g., a path ending at a \texttt{color} entity for a question expecting a \texttt{person} answer). Decomposed as:
-	\begin{align*}
-		\text{SIR}^*_{\text{type}}(q) &= \frac{|\{p \in \mathcal{P}(q) : \text{irrel}_{\text{type}}(p,q) = 1\}|}{|\mathcal{P}(q)|} \\
-		\text{SIR}^*_{\text{traj}}(q) &= \frac{|\{p \in \mathcal{P}(q) : \text{irrel}_{\text{traj}}(p,q) = 1\}|}{|\mathcal{P}(q)|} \\
-		\text{SIR}^*(q) &= \frac{|\{p \in \mathcal{P}(q) : \text{irrel}_{\text{type}}(p,q) \lor \text{irrel}_{\text{traj}}(p,q) = 1\}|}{|\mathcal{P}(q)|}
-	\end{align*}
-	\item \textbf{False Negative Rate (FNR):} Fraction of gold-truth paths incorrectly pruned.
+	\item \textbf{Pruning rate:} Fraction of GCR candidate paths excluded by the oracle. This measures oracle tightness.
+	\item \textbf{Gold-path retention:} Fraction of gold-truth paths retained after filtering. This measures recall.
+	\item \textbf{False Negative Rate (FNR):} \(1 - \text{gold-path retention}\). Fraction of gold-truth paths incorrectly pruned.
+	\item \textbf{Hits@1:} Exact match accuracy on the answer entity (downstream task).
+	\item \textbf{F1:} Token-level entity overlap between prediction and ground truth (downstream task).
 \end{enumerate}
 
-\subsection{SIR/FNR results (WebQSP, 1,628 questions)}
+\subsection{Pruning and retention results (WebQSP, 1,628 questions)}
 
-All SIR/FNR results are computed deterministically on the 	full test set; no random seeds, no threshold tuning.
+All results are computed deterministically on the full test set; no random seeds, no threshold tuning.
 
 \begin{table}[H]
 	\centering
-	\caption{Path pruning results on the full WebQSP test set.}
+	\caption{Oracle tightness and recall on the full WebQSP test set.}
 	\label{tab:sir}
 	\begin{tabular}{lrr}
 		\toprule
@@ -524,9 +432,9 @@ All SIR/FNR results are computed deterministically on the 	full test set; no ran
 		Total paths after filtering            & 3,509,451        &                                \\
 		Paths pruned                            & 593,382          &                                \\
 		\midrule
-		\textbf{SIR (overall)}                  & \textbf{14.5\%}  & Combined pruning rate          \\
-		SIR\textsubscript{type} (type gate)     & 10.6\%           & 435,897 paths blocked          \\
-		SIR\textsubscript{traj} (range gate)   & 3.8\%            & 157,485 paths blocked          \\
+		\textbf{Pruning rate (overall)}         & \textbf{14.5\%}  & Oracle tightness               \\
+		Pruning rate (type gate)               & 10.6\%           & 435,897 paths blocked          \\
+		Pruning rate (range gate)              & 3.8\%            & 157,485 paths blocked          \\
 		\midrule
 		Gold-truth paths                        & 14,829           &                                \\
 		\textbf{Type gate FNR}                  & \textbf{3.3\%}   & 490 gold paths blocked         \\
@@ -537,7 +445,7 @@ All SIR/FNR results are computed deterministically on the 	full test set; no ran
 
 The type gate does approximately \(3\times\) the work of the range gate (10.6\% vs.\ 3.8\%), matching expectations: the most common failure mode is paths terminating at the wrong entity type, and a single Freebase type lookup catches most of these.
 
-Critically, both FNR values are below 5\%, satisfying the requirement for practical deployment. The conservative fallback (pass when metadata is absent) ensures the oracle never 	catastrophically fails, unlike the cosine similarity approach at \(\tau = 0.25\), which produced empty tries for 84\% of queries.
+Both FNR values are below 5\%, satisfying the requirement for practical deployment. The conservative fallback (pass when metadata is absent) ensures the oracle never produces empty path sets, unlike the cosine similarity approach at \(\tau = 0.25\), which yielded empty tries for 84\% of queries.
 
 \subsection{Comparison with prior oracles}
 
@@ -550,18 +458,17 @@ Critically, both FNR values are below 5\%, satisfying the requirement for practi
 		\textbf{Method}              & \textbf{Encoder} & \textbf{Threshold} & \textbf{GPU}     & \textbf{Pruning}     \\
 		\midrule
 		GCR (no filter)              & No               & No                 & Decode only      & 0\%                  \\
-		Cosine DCA (\(\tau=0.25\))   & MiniLM           & Yes                & Encode + decode  & 84\% empty tries     \\
-		Decomposed DCA               & MiniLM           & Yes                & Encode + decode  & TBD                  \\
-		\textbf{Symbolic DCA (v1)}   & \textbf{No}      & \textbf{No}        & \textbf{Decode}  & \textbf{14.5\%}      \\
+		Cosine oracle (\(\tau=0.25\)) & MiniLM           & Yes                & Encode + decode  & 84\% empty tries     \\
+		\textbf{Ontology oracle}     & \textbf{No}      & \textbf{No}        & \textbf{Decode}  & \textbf{14.5\%}      \\
 		\bottomrule
 	\end{tabular}
 \end{table}
 
-The cosine oracle's 84\% empty-try rate is a pathological failure: the threshold is so aggressive that it rejects nearly all paths, leaving the LLM with nothing to generate. The symbolic oracle has no such failure mode because it is conservative by design.
+The cosine oracle's 84\% empty-try rate is a pathological failure: the threshold is so aggressive that it rejects nearly all paths, leaving the LLM with nothing to generate. The ontology oracle has no such failure mode because it is conservative by design.
 
-\subsection{Answer type inference}
+\subsection{Answer-type inference}
 
-The question-to-type mapper uses 19 regular expression patterns:
+The question-to-type mapper uses 19 regular expression patterns. These are \textbf{answer-type hints}, not semantic understanding of the question:
 
 \begin{table}[H]
 	\centering
@@ -597,6 +504,21 @@ Sports:       teams, sport, ...
 
 Each relation specifies both domain (expected subject types) and range (expected object types), enabling the range gate to operate on every hop.
 
+\section{Limitations}
+\label{sec:limitations}
+
+\paragraph{Same-type entities.}
+Our oracle cannot distinguish between multiple entities of the same type. For ``Who directed Titanic?'', both \texttt{James Cameron} and \texttt{Steven Spielberg} pass the type gate (both are \texttt{Person}). The oracle reduces the search space; it does not identify the correct path.
+
+\paragraph{Answer-type hints are not semantics.}
+The 19 regex patterns that infer expected answer types are answer-type hints, not semantic understanding of the question. A question like ``What did Marie Curie discover?'' maps to \texttt{Creative Work}, but the regex does not understand the relationship between ``discover'' and the expected answer type.
+
+\paragraph{Schema coverage.}
+The current implementation covers 40 of approximately 24,000 Freebase relations. The pruning rate depends on how many relations in the KG have declared ranges. Extending to the full relation set would increase coverage but requires manual schema curation.
+
+\paragraph{Metadata completeness.}
+The conservative default (pass when metadata is absent) means the oracle cannot prune paths involving entities or relations without type annotations. On sparse regions of the KG, the oracle degrades to GCR.
+
 \section{Related Work}
 \label{sec:related}
 
@@ -616,12 +538,12 @@ Multi-hop KGQA requires identifying a chain \((e_0, r_1, e_1, \ldots, r_L, e_L)\
 Grammar-Constrained Decoding~\citep{geng2023grammarconstrained} uses an Earley parser as the constraint oracle. Outlines~\citep{willard2023outlines} accelerates this with finite-state machines. PICARD~\citep{scholak2021picard} constrains SQL generation. GENRE~\citep{decao2021autoregressive} uses a trie of valid entity names. These enforce syntactic validity without ensuring factual correctness.
 
 \subsubsection{Knowledge graph-constrained decoding.}
-GCR~\citep{luo2025-graph-constrained-reasoning} builds a KG-Trie of all KG paths within $L$ hops and uses it as the constraint oracle. It achieves 92.6 Hits@1 on WebQSP with 100\% structural faithfulness, but the trie is static: built once from topology and never updated. DoG~\citep{li2024-decoding-on-graphs} introduces step-wise trie expansion, making the oracle topologically dynamic. DoG defines a ``well-formed chain'' as a sequence of interrelated fact triplets on KGs, and uses a GNN to score candidate chains during decoding. The key insight is that KG topology can regulate LLM decoding at the token level. However, DoG uses topology only, without incorporating ontology metadata or question semantics. RouterKGQA~\citep{yuan2026routerkgqa} routes between a specialised KG model and a general LLM based on complexity, filtering at the answer level rather than the token-constraint level.
+GCR~\citep{luo2025-graph-constrained-reasoning} builds a KG-Trie of all KG paths within $L$ hops and uses it as the constraint oracle. It achieves 92.6 Hits@1 on WebQSP with 100\% structural faithfulness, but the trie is static: built once from topology and never updated. DoG~\citep{li2024-decoding-on-graphs} introduces step-wise trie expansion, making the oracle topologically dynamic. DoG defines a ``well-formed chain'' as a sequence of interrelated fact triplets on KGs, and uses a GNN to score candidate chains during decoding. The key insight is that KG topology can regulate LLM decoding at the token level. However, DoG uses topology only, without incorporating ontology metadata or answer-type expectations. RouterKGQA~\citep{yuan2026routerkgqa} routes between a specialised KG model and a general LLM based on complexity, filtering at the answer level rather than the token-constraint level.
 
-Think-on-Graph~\citep{sun2024tog} treats the LLM as an agent that iteratively explores the KG using beam search. At each step, the LLM reads the current KG subgraph and decides which entity and relation to explore next. ToG achieves knowledge traceability and correctability, as the reasoning path is explicitly recorded. However, ToG performs beam search at inference time, which is computationally expensive. DCA-Trie pre-filters paths offline, enabling $O(1)$ per-token constraint checks during decoding.
+Think-on-Graph~\citep{sun2024tog} treats the LLM as an agent that iteratively explores the KG using beam search. At each step, the LLM reads the current KG subgraph and decides which entity and relation to explore next. ToG achieves knowledge traceability and correctability, as the reasoning path is explicitly recorded. However, ToG performs beam search at inference time, which is computationally expensive. Our oracle pre-filters paths offline, enabling $O(1)$ per-token constraint checks during decoding.
 
 \subsubsection{Ontology-aware KGQA methods.}
-Recent work has explored using ontology metadata to improve KGQA. Ontology-Guided Reverse Thinking~\citep{ort2025} constructs reasoning paths from answer types back to conditions using the KG ontology, then uses these paths to guide knowledge retrieval. ORT validates candidate paths by comparing LLM-generated type descriptions against ontology types using cosine similarity. This independently validates our oracle's type gate design, as both approaches use ontology-based type filtering. The key difference is that ORT uses ontology for \emph{path construction}, while DCA-Trie uses it for \emph{path filtering}. These are complementary approaches that can be combined: ORT constructs candidate paths, then DCA-Trie filters them using symbolic gates.
+Recent work has explored using ontology metadata to improve KGQA. Ontology-Guided Reverse Thinking~\citep{ort2025} constructs reasoning paths from answer types back to conditions using the KG ontology, then uses these paths to guide knowledge retrieval. ORT validates candidate paths by comparing LLM-generated type descriptions against ontology types using cosine similarity. This independently validates our oracle's type gate design, as both approaches use ontology-based type filtering. The key difference is that ORT uses ontology for \emph{path construction}, while we use it for \emph{path filtering}. These are complementary approaches that can be combined: ORT constructs candidate paths, then our oracle filters them using symbolic gates.
 
 \subsection{Retrieval-augmented generation}
 
@@ -633,11 +555,11 @@ All RAG approaches share a structural limitation: retrieved context is a soft in
 
 \begin{table}[H]
 	\centering
-	\caption{Comparison of DCA-Trie with prior work.}
+	\caption{Comparison of ontology-guided oracle with prior work.}
 	\label{tab:comparison}
 	\begin{tabular}{lccccc}
 		\toprule
-		\textbf{Method}       & \textbf{Faithful} & \textbf{Semantic} & \textbf{Encoder} & \textbf{Token-level} & \textbf{Ontology} \\
+		\textbf{Method}       & \textbf{Faithful} & \textbf{Type-aware} & \textbf{Encoder} & \textbf{Token-level} & \textbf{Ontology} \\
 		\midrule
 		GCR                   & 100\%             & No                & No               & Yes                  & No                \\
 		DoG                   & 100\%             & No                & No               & Yes                  & No                \\
@@ -645,30 +567,33 @@ All RAG approaches share a structural limitation: retrieved context is a soft in
 		ORT                   & Probabilistic     & Explicit          & Yes              & No                   & Yes               \\
 		RouterKGQA            & Probabilistic     & Yes (answer)      & Yes              & No                   & No                \\
 		RAG / GNN-RAG         & No                & Soft              & Yes              & No                   & No                \\
-		Cosine DCA            & 100\%             & Implicit          & Yes              & Yes                  & Implicit          \\
-		\textbf{Symbolic DCA} & \textbf{100\%}    & \textbf{Explicit} & \textbf{No}      & \textbf{Yes}         & \textbf{Yes}      \\
+		Cosine oracle         & 100\%             & Implicit          & Yes              & Yes                  & Implicit          \\
+		\textbf{Ontology oracle} & \textbf{100\%}    & \textbf{Explicit} & \textbf{No}      & \textbf{Yes}         & \textbf{Yes}      \\
 		\bottomrule
 	\end{tabular}
 \end{table}
 
-\textbf{Gap 1: The permissiveness problem.} Current KG-constrained decoding builds oracles from graph structure only, ignoring question semantics and generation state. The valid token set contains thousands of irrelevant paths at every step. Even ToG~\citep{sun2024tog}, which uses beam search to explore the KG, does not filter the token set at each step.
+\textbf{Gap 1: The permissiveness problem.} Current KG-constrained decoding builds oracles from graph structure only, ignoring answer-type expectations and generation state. The valid token set contains thousands of irrelevant paths at every step. Even ToG~\citep{sun2024tog}, which uses beam search to explore the KG, does not filter the token set at each step.
 
-\textbf{Gap 2: The static-dynamic tradeoff.} GCR's static trie is efficient but semantically blind. DoG's dynamic expansion adds no semantic filtering. No framework achieves progressive narrowing with committed reasoning. ORT~\citep{ort2025} uses ontology for path construction, not filtering, and requires an encoder for cosine similarity.
+\textbf{Gap 2: The static-dynamic tradeoff.} GCR's static trie is efficient but type-blind. DoG's dynamic expansion adds no type filtering. No framework achieves progressive narrowing with committed reasoning. ORT~\citep{ort2025} uses ontology for path construction, not filtering, and requires an encoder for cosine similarity.
 
 \textbf{Gap 3: No constraint quality metric.} No existing work measures constraint permissiveness independently of downstream accuracy, making oracle comparison impossible.
 
 \section{Conclusion}
 \label{sec:conclusion}
 
-We have presented DCA-Trie, a framework for incorporating KG ontology metadata into constrained decoding for KGQA. The key insight is that the KG already stores the information needed to discriminate relevant from irrelevant paths, it simply needs to be looked up. Our symbolic oracle, consisting of two \(O(1)\) set-containment checks, prunes 14.5\% of candidate paths on WebQSP while retaining 96.7\% of gold-truth paths.
+We argued that structural validity is too weak a notion of admissibility for graph-constrained decoding. Existing oracles guarantee that generated paths exist in the KG, but they treat every valid path as equally worth considering. We formalized constraint oracles and oracle tightness as measurable properties, and showed that KG ontology metadata provides a zero-cost symbolic oracle that meaningfully tightens the constraint set while preserving high recall.
 
-The monotonicity guarantee (Theorem~\ref{thm:monotonicity}) ensures no false positives relative to GCR, and the union-bound FNR (Theorem~\ref{thm:fnr}) provides a formal recall bound. The Lean 4 proof (3,298 jobs, zero errors) provides machine-checked assurance.
+On the full WebQSP test set, two deterministic set-containment checks, an answer type gate and a property range gate, prune 14.5\% of candidate paths while retaining 96.7\% of gold-truth paths. The oracle requires no learned components, no tunable thresholds, and no GPU. Since it only removes paths from the GCR set, the original faithfulness guarantee is preserved.
 
 \paragraph{Future work.}
-The 40-relation schema can be extended to Freebase's full relation set ($\sim$24,000). The question-to-type mapper (19 regex patterns) could be learned from the KG's type hierarchy. DCA-Trie can be combined with retrieval augmentation for systems needing both token-level guarantees and broader graph awareness.
+The hierarchy of constraint oracles (structural $\to$ ontology $\to$ question $\to$ useful) suggests natural extensions: incorporating question-specific entity linking, learning type mappings from the KG's type hierarchy, and combining with retrieval augmentation for systems needing both token-level guarantees and broader graph awareness. The 40-relation schema can be extended to Freebase's full relation set (approximately 24{,}000 relations).
 
 \paragraph{Reproducibility.}
-All code is available at \url{https://github.com/bernard/graph-constrained-reasoning}. Experiments ran on a single A100 40GB GPU with 16-bit precision. The Lean 4 proof is in \texttt{proof/formal\_proof/}.
+All code is available at
+\href{https://github.com/bernard/graph-constrained-reasoning}{github.com/bernard/ \\ graph-constrained-reasoning}.
+Experiments ran on a single A100 40GB GPU with 16-bit precision.
+The Lean 4 proof is in \texttt{proof/formal\_proof/}.
 
 \bibliographystyle{plainnat}
 \bibliography{refs}

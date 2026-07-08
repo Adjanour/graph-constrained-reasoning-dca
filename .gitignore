@@ -21,3 +21,15 @@ results/
 *.out
 *.toc
 indent.log
+# Presentation generated files
+presentation/__pycache__/
+presentation/index_assets/
+presentation/media/
+slides/
+media/
+
+# Demo cache
+demo/__pycache__/
+/tmp/
+*.egg-info/
+.venv-*/
