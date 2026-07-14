@@ -29,6 +29,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DOCKER_IMAGE="vastai/pytorch:2.6.0-cuda-12.6.3-py312"
 DISK_SIZE=200
 MIN_RELIABILITY=95
+HF_TOKEN="${HF_TOKEN:-}"
 SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30"
 POLL_BOOT=15
 POLL_EXPERIMENT=60
@@ -151,7 +152,9 @@ echo "→ Renting instance..."
 RENTAL_OUTPUT=$($VASTAI create instance "$OFFER_ID" \
     --image "$DOCKER_IMAGE" \
     --disk "$DISK_SIZE" \
-    --ssh --direct --raw 2>/dev/null)
+    --ssh --direct --raw \
+    ${HF_TOKEN:+--env "-e HF_TOKEN=$HF_TOKEN"} \
+    2>/dev/null)
 
 INSTANCE_ID=$(echo "$RENTAL_OUTPUT" | jq -r '.new_contract // .new_contract_id // .id // empty')
 

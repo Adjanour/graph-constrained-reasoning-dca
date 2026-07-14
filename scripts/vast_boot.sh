@@ -46,6 +46,12 @@ else
     cd "$REPO_DIR"
 fi
 
+# ── 2. Write .env if HF_TOKEN is set ────────────────────────────────
+if [ -n "${HF_TOKEN:-}" ]; then
+    echo "HF_TOKEN=$HF_TOKEN" > "$REPO_DIR/.env"
+    echo "HF_TOKEN written to .env" | tee -a "$LOG"
+fi
+
 # ── 3. Install dependencies ───────────────────────────────────────
 echo "Running setup.sh..." | tee -a "$LOG"
 bash experiments/type_oracle_full/setup.sh 2>&1 | tee -a "$LOG"
