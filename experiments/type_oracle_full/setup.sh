@@ -14,7 +14,7 @@ echo "========================================"
 echo "TypeOracle Experiment — Environment Setup"
 echo "========================================"
 
-# ── Core dependencies ──────────────────────────────────────────────────
+# Core dependencies
 pip install -q \
     "transformers==4.44.2" \
     "accelerate>=0.30.1" \

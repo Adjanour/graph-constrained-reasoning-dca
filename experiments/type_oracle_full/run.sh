@@ -28,8 +28,14 @@ if [ "$has_max_samples" = false ]; then
     EXTRA_ARGS+=("--max-samples" "50")
 fi
 
-# Forward all args
-EXTRA_ARGS+=("$@")
+# Translate --full into a large --max-samples (main.py doesn't have --full)
+for arg in "$@"; do
+    if [ "$arg" = "--full" ]; then
+        EXTRA_ARGS+=("--max-samples" "999999")
+    else
+        EXTRA_ARGS+=("$arg")
+    fi
+done
 
 # Setup
 echo "Running setup..."
@@ -38,4 +44,4 @@ bash "$SCRIPT_DIR/setup.sh"
 # Run
 echo ""
 echo "Starting experiment..."
-python "$SCRIPT_DIR/run.py" "${EXTRA_ARGS[@]}"
+python "$SCRIPT_DIR/main.py" "${EXTRA_ARGS[@]}"
