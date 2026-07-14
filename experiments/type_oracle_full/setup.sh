@@ -25,6 +25,7 @@ pip install -q \
     "tiktoken>=0.7.0" \
     "sentencepiece>=0.2.0" \
     "protobuf>=5.27.1" \
+    "openai>=1.31" \
     "tqdm"
 
 echo "Core dependencies installed."
