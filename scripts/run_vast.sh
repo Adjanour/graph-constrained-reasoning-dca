@@ -16,6 +16,8 @@
 #   bash scripts/run_vast.sh --method v2                  # one method
 #   bash scripts/run_vast.sh --offer 44169006             # specific offer
 #   bash scripts/run_vast.sh --gpu A100_40GB              # different GPU
+#   bash scripts/run_vast.sh --region us                   # US hosts only
+#   bash scripts/run_vast.sh --region eu                   # EU hosts only
 #
 # All extra arguments are forwarded to experiments/type_oracle_full/run.sh.
 
@@ -35,6 +37,7 @@ RESULTS_DIR="$PROJECT_ROOT/results_from_vast"
 # ─── Parse arguments ───────────────────────────────────────────────
 OFFER_ID=""
 GPU_FILTER="RTX_4090"
+REGION=""
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -43,7 +46,8 @@ while [[ $# -gt 0 ]]; do
         --gpu)     GPU_FILTER="$2"; shift 2 ;;
         --image)   DOCKER_IMAGE="$2"; shift 2 ;;
         --disk)    DISK_SIZE="$2"; shift 2 ;;
-        --help|-h) head -20 "$0" | grep '^#' | sed 's/^# *//' ; exit 0 ;;
+        --region)  REGION="$2"; shift 2 ;;
+        --help|-h) head -25 "$0" | grep '^#' | sed 's/^# *//' ; exit 0 ;;
         *)         EXTRA_ARGS+=("$1"); shift ;;
     esac
 done
@@ -51,7 +55,7 @@ done
 echo "========================================"
 echo "  Vast.ai DCA-Trie Orchestrator"
 echo "========================================"
-echo "GPU: $GPU_FILTER  Disk: ${DISK_SIZE}GB"
+echo "GPU: $GPU_FILTER  Disk: ${DISK_SIZE}GB  Region: ${REGION:-any}"
 echo "Docker: $DOCKER_IMAGE"
 echo "Results: $RESULTS_DIR"
 echo "Args: ${EXTRA_ARGS[*]:-none}"
@@ -86,16 +90,41 @@ fi
 if [ -z "$OFFER_ID" ]; then
     echo ""
     echo "→ Searching for $GPU_FILTER offers..."
-    OFFER_ID=$($VASTAI search offers \
+
+    # Get top candidates (fetch more if we need to filter by region)
+    SEARCH_LIMIT=10
+    [ -n "$REGION" ] && SEARCH_LIMIT=50
+
+    CANDIDATES=$($VASTAI search offers \
         "gpu_name=$GPU_FILTER num_gpus=1 disk_space>=$DISK_SIZE reliability>=0.$MIN_RELIABILITY" \
-        --order dph --raw 2>/dev/null \
-        | jq -r '.[0].id // empty')
+        --order dph --limit "$SEARCH_LIMIT" --raw 2>/dev/null)
+
+    if [ -n "$REGION" ]; then
+        # Filter by region
+        case "$REGION" in
+            us|US)
+                OFFER_ID=$(echo "$CANDIDATES" | jq -r '[.[] | select(.geolocation | test("_US$"))] | .[0].id // empty')
+                ;;
+            eu|EU)
+                OFFER_ID=$(echo "$CANDIDATES" | jq -r '[.[] | select(.geolocation | test("_(DE|FR|NL|SE|GB|IT|ES|PL|RO|BG|HU|DK|AT|CZ|FI|NO|BE|IE|PT|CH|HR|SK|SI|LT|LV|EE|LU|MT|CY)$"))] | .[0].id // empty')
+                ;;
+            *)
+                echo "WARNING: Unknown region '$REGION', ignoring filter."
+                OFFER_ID=$(echo "$CANDIDATES" | jq -r '.[0].id // empty')
+                ;;
+        esac
+    else
+        OFFER_ID=$(echo "$CANDIDATES" | jq -r '.[0].id // empty')
+    fi
 
     if [ -z "$OFFER_ID" ]; then
         echo "ERROR: No offers found. Try: vastai search offers \"gpu_name=$GPU_FILTER\" --order dph"
         exit 1
     fi
-    echo "  Found offer: $OFFER_ID"
+
+    # Show the selected offer details
+    OFFER_DETAILS=$(echo "$CANDIDATES" | jq -r ".[] | select(.id == $OFFER_ID) | \"  ID: \\(.id)  Price: \\(.dph_total)/hr  Location: \\(.geolocation)  Reliability: \\(.reliability)\"")
+    echo "$OFFER_DETAILS"
 else
     echo ""
     echo "→ Using offer: $OFFER_ID"
@@ -122,18 +151,27 @@ echo "  Instance ID: $INSTANCE_ID"
 echo ""
 echo "→ Waiting for instance to start (polling every ${POLL_BOOT}s)..."
 WAIT_COUNT=0
-MAX_WAIT=60
+MAX_WAIT=120  # 30 min — first-time image pulls can be slow
 while true; do
-    STATUS=$($VASTAI show instance "$INSTANCE_ID" --raw 2>/dev/null \
-        | jq -r '.actual_status // "unknown"')
+    STATUS_JSON=$($VASTAI show instance "$INSTANCE_ID" --raw 2>/dev/null)
+    STATUS=$(echo "$STATUS_JSON" | jq -r '.actual_status // "unknown"')
     case "$STATUS" in
         running) echo "  Instance is running."; break ;;
-        loading) echo "  Loading image..." ;;
-        *)       echo "  Status: $STATUS" ;;
+        loading)
+            # Show download progress if available
+            DL_STATUS=$(echo "$STATUS_JSON" | jq -r '.status_msg // ""' 2>/dev/null)
+            if [ -n "$DL_STATUS" ] && [ "$DL_STATUS" != "null" ]; then
+                echo "  Loading: $DL_STATUS"
+            else
+                echo "  Loading image... (${WAIT_COUNT}x15s elapsed)"
+            fi
+            ;;
+        *)  echo "  Status: $STATUS" ;;
     esac
     WAIT_COUNT=$((WAIT_COUNT + 1))
     if [ "$WAIT_COUNT" -ge "$MAX_WAIT" ]; then
-        echo "ERROR: Timed out (15 min). Check: vastai show instance $INSTANCE_ID"
+        echo "ERROR: Timed out (30 min). Check: vastai show instance $INSTANCE_ID"
+        echo "Or check dashboard: https://cloud.vast.ai"
         exit 1
     fi
     sleep "$POLL_BOOT"
