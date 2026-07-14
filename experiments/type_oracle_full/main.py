@@ -192,6 +192,8 @@ def _run(args, output_base):
         k=args.k, generation_mode=args.gen_mode,
         attn_implementation=attn_impl, max_new_tokens=args.max_new_tokens,
         maximun_token=4096,
+        dtype="bf16", quant="none",
+        chat_model=True, use_assistant_model=False,
     )
     t0 = time.time()
     model = LLM(model_args_ns)
