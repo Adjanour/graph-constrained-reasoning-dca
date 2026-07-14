@@ -105,14 +105,22 @@ if [ -z "$OFFER_ID" ]; then
     N_CANDIDATES=$(echo "$CANDIDATES" | jq 'length')
     echo "  Found $N_CANDIDATES offers."
 
+    # Debug: show geolocation format
+    if [ -n "$REGION" ]; then
+        echo "  Sample locations: $(echo "$CANDIDATES" | jq -r '.[0:3][] | .geolocation // .geoloc // .country // "unknown"' 2>/dev/null)"
+    fi
+
     if [ -n "$REGION" ]; then
         # Filter by region
         case "$REGION" in
             us|US)
-                OFFER_ID=$(echo "$CANDIDATES" | jq -r '[.[] | select(.geolocation | test("_US$"))] | .[0].id // empty')
+                OFFER_ID=$(echo "$CANDIDATES" | jq -r '[.[] | select(.geolocation | test(", US$"))] | .[0].id // empty')
                 ;;
             eu|EU)
-                OFFER_ID=$(echo "$CANDIDATES" | jq -r '[.[] | select(.geolocation | test("_(DE|FR|NL|SE|GB|IT|ES|PL|RO|BG|HU|DK|AT|CZ|FI|NO|BE|IE|PT|CH|HR|SK|SI|LT|LV|EE|LU|MT|CY)$"))] | .[0].id // empty')
+                OFFER_ID=$(echo "$CANDIDATES" | jq -r '[.[] | select(.geolocation | test(", (DE|FR|NL|SE|GB|IT|ES|PL|RO|BG|HU|DK|AT|CZ|FI|NO|BE|IE|PT|CH|HR|SK|SI|LT|LV|EE|LU|MT|CY)$"))] | .[0].id // empty')
+                ;;
+            ca|CA)
+                OFFER_ID=$(echo "$CANDIDATES" | jq -r '[.[] | select(.geolocation | test(", CA$"))] | .[0].id // empty')
                 ;;
             *)
                 echo "WARNING: Unknown region '$REGION', ignoring filter."
