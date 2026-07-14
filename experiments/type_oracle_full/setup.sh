@@ -26,9 +26,14 @@ pip install -q \
     "sentencepiece>=0.2.0" \
     "protobuf>=5.27.1" \
     "openai>=1.31" \
+    "python-dotenv>=1.0" \
+    "peft>=0.11" \
     "tqdm"
 
 echo "Core dependencies installed."
+
+# Catch any remaining project deps (openai, dotenv, peft, etc.)
+pip install -q -e . 2>/dev/null || true
 
 # ── Flash-Attn (pre-built wheels only) ─────────────────────────────────
 # sdpa works on all GPUs with no install. flash_attention_2 is ~20% faster
