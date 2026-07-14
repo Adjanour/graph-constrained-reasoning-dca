@@ -86,15 +86,19 @@ class HfCausalModel(BaseLanguageModel):
         if attn == "flash_attention_2" and importlib.util.find_spec("flash_attn") is None:
             attn = "sdpa"
         model_config._attn_implementation = attn
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.args.model_path,
+        model_kwargs = dict(
             config=model_config,
             device_map="auto",
             token=HF_TOKEN,
             torch_dtype=self.DTYPE.get(self.args.dtype, None),
-            load_in_8bit=self.args.quant == "8bit",
-            load_in_4bit=self.args.quant == "4bit",
             trust_remote_code=True,
+        )
+        if self.args.quant == "8bit":
+            model_kwargs["load_in_8bit"] = True
+        elif self.args.quant == "4bit":
+            model_kwargs["load_in_4bit"] = True
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.args.model_path, **model_kwargs
         )
         if self.args.use_assistant_model:
             assist_config = AutoConfig.from_pretrained(
