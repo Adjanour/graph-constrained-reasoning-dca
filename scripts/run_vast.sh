@@ -91,13 +91,19 @@ if [ -z "$OFFER_ID" ]; then
     echo ""
     echo "→ Searching for $GPU_FILTER offers..."
 
-    # Get top candidates (fetch more if we need to filter by region)
-    SEARCH_LIMIT=10
-    [ -n "$REGION" ] && SEARCH_LIMIT=50
-
+    # Fetch offers sorted by price
     CANDIDATES=$($VASTAI search offers \
         "gpu_name=$GPU_FILTER num_gpus=1 disk_space>=$DISK_SIZE reliability>=0.$MIN_RELIABILITY" \
-        --order dph --limit "$SEARCH_LIMIT" --raw 2>/dev/null)
+        --order dph --raw 2>/dev/null)
+
+    if [ -z "$CANDIDATES" ] || [ "$CANDIDATES" = "[]" ]; then
+        echo "ERROR: No offers found matching filters."
+        echo "  Try: $VASTAI search offers \"gpu_name=$GPU_FILTER num_gpus=1\" --order dph"
+        exit 1
+    fi
+
+    N_CANDIDATES=$(echo "$CANDIDATES" | jq 'length')
+    echo "  Found $N_CANDIDATES offers."
 
     if [ -n "$REGION" ]; then
         # Filter by region
