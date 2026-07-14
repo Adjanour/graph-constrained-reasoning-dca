@@ -100,6 +100,7 @@ def dca_v2_generate(
             return_dict_in_generate=True,
             pad_token_id=tokenizer.eos_token_id,
             max_new_tokens=max_new_tokens,
+            trust_remote_code=True,
         )
 
         output = tokenizer.decode(res.sequences[0][input_ids.shape[1]:], skip_special_tokens=True)

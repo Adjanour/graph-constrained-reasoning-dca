@@ -68,7 +68,7 @@ def _build_result_dict(qid, question, prediction_str, ground_truth, cond_name, *
 # ---------------------------------------------------------------------------
 
 
-def _run_baseline(model, input_builder, data, qid, cond_name, _oracle, index_len):
+def _run_baseline(model, input_builder, data, qid, cond_name, _oracle, index_len, **_kwargs):
     """Run baseline GCR.  Returns (result_dict | None, trie_ok)."""
     trie, all_paths = build_unfiltered_trie(model.tokenizer, data, index_len)
     if trie is None:
@@ -85,7 +85,7 @@ def _run_baseline(model, input_builder, data, qid, cond_name, _oracle, index_len
     return result, True
 
 
-def _run_v1(model, input_builder, data, qid, cond_name, oracle, index_len):
+def _run_v1(model, input_builder, data, qid, cond_name, oracle, index_len, **_kwargs):
     """Run v1 static type-oracle.  Returns (result_dict | None, trie_ok)."""
     trie, all_paths, filtered = build_filtered_trie(model.tokenizer, data, index_len, oracle)
     if trie is None:
