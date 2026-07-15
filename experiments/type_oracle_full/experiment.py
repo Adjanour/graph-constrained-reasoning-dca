@@ -13,7 +13,7 @@ import traceback
 
 import src.utils as graph_utils
 from approach3_symbolic.type_oracle import TypeOracle
-from src.utils.qa_utils import extract_topk_prediction, normalize
+from src.utils.qa_utils import eval_hit, extract_topk_prediction, normalize
 
 from decoding import dca_v2_generate, run_constrained_decoding
 from trie_utils import build_filtered_trie, build_unfiltered_trie
@@ -33,19 +33,40 @@ from utils import (
 
 
 def compute_hits(preds):
-    """Compute Hits@1: exact normalized match between top-1 prediction and
-    any ground-truth answer."""
+    """Compute Hits@1: check if any extracted answer matches a ground-truth answer.
+
+    Mirrors the original GCR ``eval_path_result_w_ans`` behaviour:
+    - Parses ``# Answer:\\n<answer>`` from each prediction
+    - Uses substring containment (``eval_hit``) for matching
+    """
     hits = 0
     for p in preds:
         prediction = p.get("prediction", "")
-        pred_str = prediction if isinstance(prediction, str) else " ".join(prediction)
-        top_preds = extract_topk_prediction(pred_str, -1)
-        pred_normalized = normalize(" ".join(top_preds))
         answers = list(set(p.get("ground_truth", [])))
-        for a in answers:
-            if normalize(a) == pred_normalized:
-                hits += 1
-                break
+        if not answers:
+            continue
+
+        # Extract answer strings from structured predictions
+        predicted_answers = []
+        items = prediction if isinstance(prediction, list) else [prediction]
+        for item in items:
+            if "# Answer:\n" in item:
+                ans = item.split("# Answer:\n")[-1].strip()
+                if ans:
+                    predicted_answers.append(ans)
+            elif "# Answer:" in item:
+                ans = item.split("# Answer:")[-1].strip()
+                if ans:
+                    predicted_answers.append(ans)
+
+        if not predicted_answers:
+            continue
+
+        # Substring containment check (matches original eval_hit behaviour)
+        pred_str = " ".join(predicted_answers)
+        if eval_hit(pred_str, answers):
+            hits += 1
+
     return hits
 
 
