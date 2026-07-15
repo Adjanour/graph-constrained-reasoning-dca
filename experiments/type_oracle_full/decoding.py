@@ -86,9 +86,9 @@ def dca_v2_generate(
     output_text = ""
     committed_entity = start_entities[0] if start_entities else None
     hop = 0
-    llm_input = llm_model.prepare_model_prompt(prompt)
 
     for _step in range(max_hops * 3):
+        llm_input = llm_model.prepare_model_prompt(prompt)
         gcr = GraphConstrainedDecoding(
             tokenizer, current_trie, start_id, end_id, enable_constrained_by_default=True
         )
@@ -104,7 +104,6 @@ def dca_v2_generate(
             return_dict_in_generate=True,
             pad_token_id=tokenizer.eos_token_id,
             max_new_tokens=max_new_tokens,
-            trust_remote_code=True,
         )
 
         output = tokenizer.decode(res.sequences[0][input_ids.shape[1]:], skip_special_tokens=True)

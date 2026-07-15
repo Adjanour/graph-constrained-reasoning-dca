@@ -23,7 +23,6 @@ class GraphConstrainedDecodingModel(HfCausalModel):
                 prefix_allowed_tokens_fn=gcr.allowed_tokens_fn,
                 return_dict_in_generate=True,
                 pad_token_id=self.tokenizer.eos_token_id,
-                trust_remote_code=True,
             )
         except Exception as e:
             logger.error("generate failed: %s", e, exc_info=True)
