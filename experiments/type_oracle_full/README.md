@@ -84,8 +84,33 @@ bash experiments/type_oracle_full/run.sh --output-dir /path/to/results
 Each condition writes predictions incrementally to JSONL. If interrupted, re-running
 will skip already-processed questions. Use `--force-rerun` to start fresh.
 
+## Reproducing Full Results
+
+Run one dataset at a time to avoid losing progress if interrupted.
+Both runs share the same output directory so results are combined.
+
+```bash
+# Step 1: WebQSP (~1600 questions, ~3 methods)
+bash experiments/type_oracle_full/run.sh \
+  --datasets RoG-webqsp --full \
+  --output-dir results/final_experiment/run1
+
+# Step 2: CWQ (~3500 questions, ~3 methods)
+bash experiments/type_oracle_full/run.sh \
+  --datasets RoG-cwq --full \
+  --output-dir results/final_experiment/run1
+```
+
+Via Vast.ai:
+
+```bash
+bash scripts/run_vast.sh --datasets RoG-webqsp --output-dir results/final_experiment/run1
+bash scripts/run_vast.sh --datasets RoG-cwq    --output-dir results/final_experiment/run1
+```
+
 ## Requirements
 
 - GPU with 16GB+ VRAM (A100 recommended for flash-attn)
 - Python 3.10+
+- `transformers>=4.44,<5.0` (pinned — 5.x has breaking generation API changes)
 - See `setup.sh` for dependencies
