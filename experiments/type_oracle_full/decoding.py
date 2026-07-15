@@ -82,9 +82,9 @@ def dca_v2_generate(
     output_text = ""
     committed_entity = start_entities[0] if start_entities else None
     hop = 0
+    llm_input = llm_model.prepare_model_prompt(prompt)
 
     for _step in range(max_hops * 3):
-        llm_input = llm_model.prepare_model_prompt(prompt)
         gcr = GraphConstrainedDecoding(
             tokenizer, current_trie, start_id, end_id, enable_constrained_by_default=False
         )
@@ -141,7 +141,7 @@ def dca_v2_generate(
             expanded_trie = build_trie_from_strings(tokenizer, new_paths)
             if expanded_trie is not None:
                 current_trie = expanded_trie
-                prompt = prompt + f"\n{output.strip()}\n"
+                llm_input = llm_input + f"\n{output.strip()}\n"
         else:
             break
 

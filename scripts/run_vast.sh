@@ -13,11 +13,16 @@
 #   bash scripts/run_vast.sh                              # full run
 #   bash scripts/run_vast.sh --max-samples 50             # quick test
 #   bash scripts/run_vast.sh --datasets RoG-webqsp        # one dataset
+#   bash scripts/run_vast.sh --datasets RoG-cwq           # other dataset
 #   bash scripts/run_vast.sh --method v2                  # one method
 #   bash scripts/run_vast.sh --offer 44169006             # specific offer
 #   bash scripts/run_vast.sh --gpu A100_40GB              # different GPU
 #   bash scripts/run_vast.sh --region us                   # US hosts only
 #   bash scripts/run_vast.sh --region eu                   # EU hosts only
+#
+# Split-dataset strategy (recommended to avoid losing progress):
+#   bash scripts/run_vast.sh --datasets RoG-webqsp --output-dir results/final_experiment/run1
+#   bash scripts/run_vast.sh --datasets RoG-cwq    --output-dir results/final_experiment/run1
 #
 # All extra arguments are forwarded to experiments/type_oracle_full/run.sh.
 

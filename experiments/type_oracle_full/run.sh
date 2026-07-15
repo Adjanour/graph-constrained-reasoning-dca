@@ -5,8 +5,14 @@
 #   bash experiments/type_oracle_full/run.sh                     # 50 samples, both datasets, all methods
 #   bash experiments/type_oracle_full/run.sh --full               # full test set
 #   bash experiments/type_oracle_full/run.sh --method v1          # v1 only
-#   bash experiments/type_oracle_full/run.sh --datasets RoG-webqsp
+#   bash experiments/type_oracle_full/run.sh --datasets RoG-webqsp           # webqsp only
+#   bash experiments/type_oracle_full/run.sh --datasets RoG-cwq              # cwq only
+#   bash experiments/type_oracle_full/run.sh --datasets RoG-webqsp RoG-cwq   # both
 #   bash experiments/type_oracle_full/run.sh --max-samples 10
+#
+# Tip: Run one dataset at a time to avoid losing progress if interrupted.
+#   bash experiments/type_oracle_full/run.sh --datasets RoG-webqsp --full
+#   bash experiments/type_oracle_full/run.sh --datasets RoG-cwq --full
 #
 # All extra arguments are forwarded to run.py.
 

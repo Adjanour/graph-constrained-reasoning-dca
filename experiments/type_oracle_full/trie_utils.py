@@ -43,6 +43,7 @@ def build_filtered_trie(tokenizer, question_dict, index_len, oracle):
 
     wrapped = [f"{PATH_START}{s}{PATH_END}" for s in filtered_str]
     tokenized = tokenizer(wrapped, padding=False, add_special_tokens=False).input_ids
+    tokenized = [ids + [tokenizer.eos_token_id] for ids in tokenized]
     trie = MarisaTrie(tokenized, max_token_id=len(tokenizer) + 1)
     return trie, all_paths, filtered
 
@@ -61,6 +62,7 @@ def build_unfiltered_trie(tokenizer, question_dict, index_len):
 
     wrapped = [f"{PATH_START}{s}{PATH_END}" for s in all_str]
     tokenized = tokenizer(wrapped, padding=False, add_special_tokens=False).input_ids
+    tokenized = [ids + [tokenizer.eos_token_id] for ids in tokenized]
     trie = MarisaTrie(tokenized, max_token_id=len(tokenizer) + 1)
     return trie, all_paths
 
