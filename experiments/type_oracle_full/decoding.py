@@ -17,6 +17,8 @@ def run_constrained_decoding(model, input_builder, data, trie):
     start_token_ids = model.tokenizer.convert_tokens_to_ids(input_builder.PATH_START_TOKEN)
     end_token_ids = model.tokenizer.convert_tokens_to_ids(input_builder.PATH_END_TOKEN)
     llm_input = model.prepare_model_prompt(input_query)
+    logger.debug("Constrained decoding: prompt_len=%d trie_paths=%s",
+                 len(llm_input), "yes" if trie else "NO TRIE")
     prediction = model.generate_sentence(
         llm_input,
         trie,
@@ -24,6 +26,8 @@ def run_constrained_decoding(model, input_builder, data, trie):
         end_token_ids=end_token_ids,
         enable_constrained_by_default=False,
     )
+    logger.debug("Prediction type=%s value=%s", type(prediction).__name__,
+                 repr(prediction)[:200] if prediction else "None")
     return prediction, ground_paths
 
 
@@ -86,7 +90,7 @@ def dca_v2_generate(
 
     for _step in range(max_hops * 3):
         gcr = GraphConstrainedDecoding(
-            tokenizer, current_trie, start_id, end_id, enable_constrained_by_default=False
+            tokenizer, current_trie, start_id, end_id, enable_constrained_by_default=True
         )
         inputs = tokenizer(llm_input, return_tensors="pt", add_special_tokens=False)
         input_ids = inputs.input_ids.to(llm_model.model.device)

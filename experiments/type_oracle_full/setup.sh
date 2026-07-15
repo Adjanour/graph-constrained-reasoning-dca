@@ -35,6 +35,9 @@ echo "Core dependencies installed."
 # Catch any remaining project deps (openai, dotenv, peft, etc.)
 pip install -q -e . 2>/dev/null || true
 
+# Re-pin transformers — trl wants >=4.56 but our code needs 4.44.x
+pip install -q "transformers==4.44.2"
+
 # ── Flash-Attn (pre-built wheels only) ─────────────────────────────────
 # sdpa works on all GPUs with no install. flash_attention_2 is ~20% faster
 # on A100 for beam search, but not required.

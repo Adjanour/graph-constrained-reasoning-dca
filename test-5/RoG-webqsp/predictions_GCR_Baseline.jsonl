@@ -1,0 +1,5 @@
+{"id": "WebQTest-0", "question": "what does jamaican people speak", "prediction": "", "ground_truth": ["Jamaican English", "Jamaican Creole English Language"], "mode": "GCR_Baseline", "n_paths_all": 3953}
+{"id": "WebQTest-1", "question": "what did james k polk do before he was president", "prediction": "", "ground_truth": ["United States Representative", "Governor of Tennessee", "Speaker of the United States House of Representatives"], "mode": "GCR_Baseline", "n_paths_all": 2364}
+{"id": "WebQTest-3", "question": "who plays ken barlow in coronation street", "prediction": "", "ground_truth": ["William Roache"], "mode": "GCR_Baseline", "n_paths_all": 1741}
+{"id": "WebQTest-6", "question": "where is jamarcus russell from", "prediction": "", "ground_truth": ["Mobile"], "mode": "GCR_Baseline", "n_paths_all": 704}
+{"id": "WebQTest-7", "question": "where was george washington carver from", "prediction": "", "ground_truth": ["Diamond"], "mode": "GCR_Baseline", "n_paths_all": 1031}

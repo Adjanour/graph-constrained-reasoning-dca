@@ -1,0 +1,32 @@
+{
+  "RoG-webqsp|GCR_Baseline": {
+    "condition": "GCR_Baseline",
+    "n": 5,
+    "hits": 0,
+    "hit_at_1": 0.0,
+    "time_s": 1.4,
+    "n_dead_ends": 0,
+    "n_skipped": 0
+  },
+  "RoG-webqsp|DCA_v1_Static": {
+    "condition": "DCA_v1_Static",
+    "n": 5,
+    "hits": 0,
+    "hit_at_1": 0.0,
+    "time_s": 1.2,
+    "n_dead_ends": 0,
+    "n_skipped": 0,
+    "total_paths_all": 9793,
+    "total_paths_filtered": 7898,
+    "reduction_pct": 19.4
+  },
+  "RoG-webqsp|DCA_v2_Dynamic": {
+    "condition": "DCA_v2_Dynamic",
+    "n": 5,
+    "hits": 0,
+    "hit_at_1": 0.0,
+    "time_s": 80.0,
+    "n_dead_ends": 0,
+    "n_skipped": 0
+  }
+}
