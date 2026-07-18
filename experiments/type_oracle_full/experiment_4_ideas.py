@@ -444,6 +444,27 @@ def _extract_answers(prediction):
 # Main experiment loop
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Idea 5: v2 step-wise decoding
+# ---------------------------------------------------------------------------
+
+def run_v2(model, input_builder, data, qid, cond_name, oracle, index_len, max_new_tokens=256, **kwargs):
+    """v2 step-wise hop-by-hop trie expansion."""
+    import src.utils as graph_utils
+    from decoding import dca_v2_generate
+    nx_graph = graph_utils.build_graph(data["graph"], undirected=False)
+    prediction = dca_v2_generate(
+        data=data, nx_graph=nx_graph, llm_model=model,
+        tokenizer=model.tokenizer, oracle=oracle,
+        max_hops=index_len, max_new_tokens=max_new_tokens,
+        input_builder=input_builder,
+    )
+    if prediction is None:
+        return None, False
+    result = _make_result(qid, data["question"], prediction, data["answer"], cond_name)
+    return result, True
+
+
 # Registry of runner functions
 RUNNERS = {
     "baseline": _run_generic_baseline,
@@ -453,6 +474,7 @@ RUNNERS = {
     "adaptive100": lambda *a, **kw: run_adaptive(*a, **kw, max_paths=100),
     "adaptive500": lambda *a, **kw: run_adaptive(*a, **kw, max_paths=500),
     "label-plan": run_label_plan,
+    "v2": run_v2,
 }
 
 
@@ -700,6 +722,51 @@ def run_experiment(args):
         m = all_metrics[method]
         logger.info(f"{method:<15} {m['n']:>6} {m['hits']:>8} {m['hit_at_1']:>7.1f}% "
                      f"{m['time_s']:>7.0f}s {m['avg_time_per_q']:>7.2f}s")
+
+    logger.info("=" * 80)
+
+    # ── Tradeoff curve (baseline + adaptive methods) ─────────────────────
+    has_adaptive = any(m.startswith("adaptive") for m in methods)
+    if "baseline" in all_metrics and has_adaptive:
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("%s", "TRADEOFF CURVE: Accuracy vs Latency at Different Path Budgets".center(80))
+        logger.info("=" * 80)
+        trade_header = f"{'Method':<15} {'Hits@1':>8} {'Δ vs baseline':>14} {'Time':>8} {'Avg/q':>8} {'Path Limit':>12}"
+        logger.info(trade_header)
+        logger.info("-" * 65)
+        bl = all_metrics["baseline"]
+        logger.info(f"{'baseline':<15} {bl['hit_at_1']:>7.1f}% {'—':>14} {bl['time_s']:>7.0f}s {bl['avg_time_per_q']:>7.2f}s {'∞':>12}")
+        for adapt_name in ["adaptive30", "adaptive100", "adaptive500"]:
+            if adapt_name in all_metrics:
+                am = all_metrics[adapt_name]
+                delta = am["hit_at_1"] - bl["hit_at_1"]
+                limit = adapt_name.replace("adaptive", "")
+                logger.info(f"{adapt_name:<15} {am['hit_at_1']:>7.1f}% {delta:>+13.1f}% {am['time_s']:>7.0f}s {am['avg_time_per_q']:>7.2f}s {limit:>12}")
+        logger.info("-" * 65)
+
+    # ── Filtering narrative (baseline + filtered + label-plan) ──────────
+    for pair_name, label in [("filtered", "FILTERING NARRATIVE"), ("label-plan", "LABEL-LEVEL PLANNING")]:
+        if pair_name in all_metrics and "baseline" in all_metrics:
+            fm = all_metrics[pair_name]
+            bl = all_metrics["baseline"]
+            delta = fm["hit_at_1"] - bl["hit_at_1"]
+            reduction = fm.get("reduction_pct", 0)
+            logger.info("")
+            logger.info("=" * 80)
+            logger.info("%s", f"{label}".center(80))
+            logger.info("=" * 80)
+            logger.info(f"  {pair_name:<20} {fm['hit_at_1']:>7.1f}% vs baseline {bl['hit_at_1']:>7.1f}%  (Δ = {delta:>+5.1f}%)")
+            if reduction:
+                logger.info(f"  Path reduction: {reduction}%")
+            if "avg_paths_all" in fm:
+                logger.info(f"  Avg paths before: {fm['avg_paths_all']}")
+            if "avg_paths_filtered" in fm:
+                logger.info(f"  Avg paths after:  {fm['avg_paths_filtered']}")
+            if "avg_paths_used" in fm:
+                logger.info(f"  Avg paths used:   {fm['avg_paths_used']}")
+
+    logger.info("")
     logger.info("=" * 80)
 
     with open(output_dir / "summary.json", "w") as f:
@@ -719,7 +786,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--max-samples", type=int, default=100)
     parser.add_argument("--methods", default="baseline,filtered,adaptive100,label-plan",
-                        help="Comma-separated: baseline,filtered,validate,adaptive30,adaptive100,adaptive500,label-plan")
+                        help="Comma-separated: baseline,filtered,validate,adaptive30,adaptive100,adaptive500,label-plan,v2")
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--sample-timeout", type=int, default=120)
     args = parser.parse_args()
