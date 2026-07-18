@@ -22,6 +22,8 @@ def build_filtered_trie(tokenizer, question_dict, index_len, oracle):
 
     all_paths = graph_utils.dfs(g, entities, index_len)
     ans_types = oracle.infer_answer_types(question_dict["question"])
+    if not ans_types:
+        ans_types = oracle.infer_answer_types_from_paths(all_paths)
 
     filtered = []
     for p in all_paths:

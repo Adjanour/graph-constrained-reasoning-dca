@@ -364,15 +364,61 @@ _RELATION_SCHEMA: Dict[str, Dict[str, FrozenSet[str]]] = {
 
 
 # ---------------------------------------------------------------------------
+# Schema predicate detection (for auto-mining)
+# ---------------------------------------------------------------------------
+# These predicates are Freebase schema/metadata, not data relations that
+# carry entity-to-entity connectivity.  We skip them when mining relation
+# domain/range from the graph.
+
+_SCHEMA_PREDICATES: FrozenSet[str] = frozenset({
+    "common.topic.notable_types",
+    "freebase.type_hints.included_types",
+    "freebase.type_profile.strict_included_types",
+    "rdf-schema#domain",
+    "rdf-schema#range",
+    "type.property.expected_type",
+    "type.property.schema",
+    "type.type.properties",
+    "type.type.expected_by",
+    "type.type.domain",
+    "freebase.type_profile.published",
+    "freebase.type_profile.kind",
+    "freebase.type_profile.equivalent_topic",
+    "freebase.equivalent_topic.equivalent_type",
+    "freebase.type_kind.types",
+    "freebase.type_profile.tasks",
+    "freebase.valuenotation.is_reviewed",
+    "freebase.valuenotation.has_value",
+})
+
+
+def _is_schema_predicate(r: str) -> bool:
+    """Return True if *r* is a Freebase schema/metadata predicate (not a data relation)."""
+    if r in _SCHEMA_PREDICATES:
+        return True
+    if r.startswith("type."):
+        return True
+    if r.startswith("base.") and "schema" in r:
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # TypeOracle
 # ---------------------------------------------------------------------------
 
 
 class TypeOracle:
     """
-    Purely symbolic type oracle using the Freebase schema.
+    Purely symbolic type oracle using the Freebase ontology schema.
 
-    All operations are O(1) set lookups. No forward passes.
+    Two sources of relation domain/range information:
+      1. Hand-curated ``_RELATION_SCHEMA`` (38 relations, high precision)
+      2. Auto-mined from actual data triples in the subgraph (full coverage)
+
+    When ``from_graph()`` is called, it automatically mines relation schema
+    from the subgraph data, so ALL relations in the subgraph have at least
+    some domain/range information.
 
     Usage
     -----
@@ -384,11 +430,13 @@ class TypeOracle:
         self,
         entity_type_map: Dict[str, FrozenSet[str]] | None = None,
         relation_schema: Dict[str, Dict[str, FrozenSet[str]]] | None = None,
+        mined_schema: Dict[str, Dict[str, FrozenSet[str]]] | None = None,
     ):
         self._entity_types: Dict[str, FrozenSet[str]] = entity_type_map or {}
         self._schema: Dict[str, Dict[str, FrozenSet[str]]] = relation_schema or dict(
             _RELATION_SCHEMA
         )
+        self._mined_schema: Dict[str, Dict[str, FrozenSet[str]]] = mined_schema or {}
 
     # ------------------------------------------------------------------
     # Construction from raw graph
@@ -400,9 +448,10 @@ class TypeOracle:
         Build a TypeOracle from a Freebase subgraph.
 
         Extracts:
-          - Entity types from common.topic.notable_types triples
-          - Entity type aliases from freebase.type_hints.included_types
-          - supertype relationships from type.type.expected_by
+          - Entity types from ``common.topic.notable_types`` triples
+          - Entity type aliases from ``freebase.type_hints.included_types``
+          - **Relation domain/range** from actual data triples via type
+            aggregation (NEW — covers ALL relations, not just 38 hand-curated)
 
         Parameters
         ----------
@@ -427,7 +476,50 @@ class TypeOracle:
             e: frozenset(ts) for e, ts in entity_types.items()
         }
 
-        return cls(entity_type_map=frozen)
+        # NEW: mine relation schema from data triples
+        mined = cls._mine_relation_schema(graph_triples, frozen)
+
+        return cls(entity_type_map=frozen, mined_schema=mined)
+
+    # ------------------------------------------------------------------
+    # Auto-mine relation schema from data triples
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _mine_relation_schema(
+        graph_triples: List[List[str]],
+        entity_type_map: Dict[str, FrozenSet[str]],
+    ) -> Dict[str, Dict[str, FrozenSet[str]]]:
+        """
+        Infer relation domain/range from actual data triples in the subgraph.
+
+        For each non-schema triple ``(h, r, t)``, looks up the entity types
+        of ``h`` (→ domain) and ``t`` (→ range) and aggregates them per
+        relation.  The result is a schema dict in the same format as
+        ``_RELATION_SCHEMA``.
+
+        This covers **all** relations in the subgraph, not just 38 hand-curated
+        ones.  The mined ranges reflect actual usage patterns rather than
+        Freebase's theoretical type hierarchy, so they tend to be *more*
+        specific and more useful for filtering.
+        """
+        mined: Dict[str, Dict[str, set]] = defaultdict(lambda: {"domain": set(), "range": set()})
+
+        for h, r, t in graph_triples:
+            if _is_schema_predicate(r):
+                continue
+            h_types = entity_type_map.get(h, frozenset())
+            t_types = entity_type_map.get(t, frozenset())
+            if h_types:
+                mined[r]["domain"].update(h_types)
+            if t_types:
+                mined[r]["range"].update(t_types)
+
+        return {
+            r: {"domain": frozenset(d["domain"]), "range": frozenset(d["range"])}
+            for r, d in mined.items()
+            if d["domain"] or d["range"]
+        }
 
     # ------------------------------------------------------------------
     # Entity type access
@@ -438,7 +530,7 @@ class TypeOracle:
         return self._entity_types.get(entity_name, frozenset())
 
     # ------------------------------------------------------------------
-    # Answer type inference from question
+    # Answer type inference from question (regex) + KG fallback
     # ------------------------------------------------------------------
 
     def infer_answer_types(self, question: str) -> FrozenSet[str]:
@@ -463,6 +555,41 @@ class TypeOracle:
         q = re.sub(r'"[^"]+"', " [ent] ", question)
         q = re.sub(r"'[^']+'", " [ent] ", q)
         return q
+
+    # ------------------------------------------------------------------
+    # Answer type inference from KG (no regex, no NLU)
+    # ------------------------------------------------------------------
+
+    def infer_answer_types_from_paths(
+        self,
+        paths: List[List[Tuple[str, str, str]]],
+    ) -> FrozenSet[str]:
+        """
+        Infer answer types purely from the KG — no regex, no NLU.
+
+        Uses the entity types of all terminal entities in the candidate
+        *paths*.  This naturally reflects what types of answers are
+        reachable from the topic entities via the KG schema.
+
+        This is used as a fallback when ``infer_answer_types()`` returns
+        empty.  Because it relies on actual KG entities (not question
+        wording), it's robust to unusual question phrasing.
+
+        Parameters
+        ----------
+        paths : list of list of (head, relation, tail) tuples
+            Candidate KG paths (e.g., from DFS).
+
+        Returns
+        -------
+        frozenset of human-readable type strings.
+        """
+        answer_types: Set[str] = set()
+        for path in paths:
+            terminal = path[-1][2]
+            etypes = self._entity_types.get(terminal, frozenset())
+            answer_types.update(etypes)
+        return frozenset(answer_types)
 
     # ------------------------------------------------------------------
     # Gate 1: Answer type gate (terminal hop only)
@@ -503,12 +630,18 @@ class TypeOracle:
         Check whether tail_entity's type is compatible with the
         relation's declared range.
 
+        Checks two sources in order:
+          1. Hand-curated ``_RELATION_SCHEMA`` (38 relations, authoritative)
+          2. Auto-mined schema from data triples (all relations, data-driven)
+
         Returns True if:
-          - relation not in known schema (conservative)
+          - relation not in any known schema (conservative)
           - tail entity has no recorded types (conservative)
           - tail entity types intersect the relation's range
         """
-        rel_schema = self._schema.get(relation)
+        rel_schema = self._mined_schema.get(relation)
+        if rel_schema is None:
+            rel_schema = self._schema.get(relation)
         if rel_schema is None:
             return True
 

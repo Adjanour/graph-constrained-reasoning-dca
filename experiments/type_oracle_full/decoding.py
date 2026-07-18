@@ -87,8 +87,10 @@ def dca_v2_generate(
     committed_entity = start_entities[0] if start_entities else None
     hop = 0
 
+    # Build the initial llm_input ONCE (context accumulation fix)
+    llm_input = llm_model.prepare_model_prompt(prompt)
+
     for _step in range(max_hops * 3):
-        llm_input = llm_model.prepare_model_prompt(prompt)
         gcr = GraphConstrainedDecoding(
             tokenizer, current_trie, start_id, end_id, enable_constrained_by_default=True
         )

@@ -259,6 +259,8 @@ def build_label_plan_trie(tokenizer, question_dict, index_len, oracle):
 
     all_paths = graph_utils.dfs(g, entities, index_len)
     answer_types = oracle.infer_answer_types(question_dict["question"])
+    if not answer_types:
+        answer_types = oracle.infer_answer_types_from_paths(all_paths)
 
     # Filter paths where terminal entity matches answer type
     # (same as DCA v1 type gate, but we also filter intermediate hops by range gate)
