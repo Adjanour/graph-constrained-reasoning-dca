@@ -91,3 +91,24 @@ python experiments/type_oracle_full/experiment_4_ideas.py \
   --methods baseline,filtered,validate,adaptive30,adaptive100,adaptive500,label-plan \
   --output-dir results/4_ideas_full_run
 ```
+
+## 7. Adaptive Budget Experiment (with v2 premium comparator)
+
+Tests 3 tiers: budget (adaptive30/100/500), smart (adaptive-budget), premium (v2 dynamic):
+
+```bash
+# Dry run on CWQ (10 samples, all methods)
+python experiments/type_oracle_full/experiment_adaptive_budget.py \
+  --model-path rmanluo/GCR-Meta-Llama-3.1-8B-Instruct \
+  --dataset RoG-cwq --max-samples 10 \
+  --methods baseline,adaptive30,adaptive100,adaptive500,adaptive-budget,v2 \
+  --output-dir results/adaptive_budget_dryrun
+
+# Full run on WebQSP (~2K questions)
+nohup python experiments/type_oracle_full/experiment_adaptive_budget.py \
+  --model-path rmanluo/GCR-Meta-Llama-3.1-8B-Instruct \
+  --dataset RoG-webqsp --max-samples 999999 \
+  --methods baseline,adaptive30,adaptive100,adaptive500,adaptive-budget,v2 \
+  --output-dir results/adaptive_budget_webqsp \
+  > /workspace/adaptive_budget_webqsp.log 2>&1 &
+```

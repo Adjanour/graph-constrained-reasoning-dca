@@ -261,6 +261,23 @@ def _run_adaptive_budget(model, input_builder, data, qid, cond_name, oracle, ind
     return result, True
 
 
+def _run_v2(model, input_builder, data, qid, cond_name, oracle, index_len, max_new_tokens=256, **kwargs):
+    """v2: step-wise dynamic expansion (context-aware, never enumerates all paths)."""
+    from decoding import dca_v2_generate
+    nx_graph = graph_utils.build_graph(data["graph"], undirected=False)
+    prediction = dca_v2_generate(
+        data=data, nx_graph=nx_graph, llm_model=model,
+        tokenizer=model.tokenizer, oracle=oracle,
+        max_hops=index_len, max_new_tokens=max_new_tokens,
+        input_builder=input_builder,
+    )
+    if prediction is None:
+        return None, False
+    result = _make_result(qid, data["question"], prediction, data["answer"], cond_name,
+                          extra={"approach": "dynamic"})
+    return result, True
+
+
 # Registry
 RUNNERS = {
     "baseline": _run_baseline,
@@ -268,6 +285,7 @@ RUNNERS = {
     "adaptive100": lambda *a, **kw: _run_fixed_budget(*a, **kw, max_paths=100),
     "adaptive500": lambda *a, **kw: _run_fixed_budget(*a, **kw, max_paths=500),
     "adaptive-budget": _run_adaptive_budget,
+    "v2": _run_v2,
 }
 
 
@@ -490,6 +508,8 @@ def run_experiment(args):
             budget_col = f"{m.get('avg_budget', ''):>8}"
         elif method == "baseline":
             budget_col = f"{'∞':>8}"
+        elif method == "v2":
+            budget_col = f"{'dynamic':>8}"
         else:
             budget_col = f"{method.replace('adaptive', ''):>8}"
         logger.info(f"{method:<20} {m['n']:>6} {m['hit_at_1']:>7.1f}% "
@@ -522,6 +542,8 @@ def run_experiment(args):
             paths = "all"
         elif method == "adaptive-budget":
             paths = "auto"
+        elif method == "v2":
+            paths = "dynamic"
         else:
             paths = method.replace("adaptive", "")
         logger.info(f"{method:<20} {m['hit_at_1']:>7.1f}% {m['avg_time_per_q']:>9.2f}s {paths:>8}")
@@ -560,8 +582,8 @@ if __name__ == "__main__":
     parser.add_argument("--index-len", type=int, default=2)
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--max-samples", type=int, default=100)
-    parser.add_argument("--methods", default="baseline,adaptive30,adaptive100,adaptive500,adaptive-budget",
-                        help="Comma-separated: baseline,adaptive30,adaptive100,adaptive500,adaptive-budget")
+    parser.add_argument("--methods", default="baseline,adaptive30,adaptive100,adaptive500,adaptive-budget,v2",
+                        help="Comma-separated: baseline,adaptive30,adaptive100,adaptive500,adaptive-budget,v2")
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--sample-timeout", type=int, default=120)
     args = parser.parse_args()
