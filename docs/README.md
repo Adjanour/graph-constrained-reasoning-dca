@@ -103,6 +103,10 @@ FORCE = True
 
 Full experiment: `MAX_SAMPLES = None`, `K = 5`. Expect 1–2 hours (WebQSP) or 3–4 hours (CWQ) on A100.
 
+## ORT Improvements
+
+For experimental ORT (Ontology-Guided Reverse Thinking) improvements to DCA-Trie, see [ORT_IMPROVEMENTS.md](ORT_IMPROVEMENTS.md).
+
 ## Three Approaches
 
 | Directory | Method | Key Idea | Encoder? | Threshold? |

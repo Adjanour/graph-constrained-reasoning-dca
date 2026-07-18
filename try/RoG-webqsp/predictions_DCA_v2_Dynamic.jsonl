@@ -1,0 +1,1 @@
+{"id": "WebQTest-0", "question": "what does jamaican people speak", "prediction": "# Reasoning Path:\nJamaica -> location.country.languages_spoken -> Jamaican Creole English Language\n# Answer:\nJamaican Creole English Language", "ground_truth": ["Jamaican English", "Jamaican Creole English Language"], "mode": "DCA_v2_Dynamic"}

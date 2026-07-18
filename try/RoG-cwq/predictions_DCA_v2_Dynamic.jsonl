@@ -1,0 +1,1 @@
+{"id": "WebQTest-832_c334509bb5e02cacae1ba2e80c176499", "question": "Lou Seal is the mascot for the team that last won the World Series when?", "prediction": "# Reasoning Path:\nLou Seal -> sports.mascot.team -> San Francisco Giants\n# Answer:\nSan Francisco Giants", "ground_truth": ["2014 World Series"], "mode": "DCA_v2_Dynamic"}

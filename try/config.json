@@ -1,0 +1,19 @@
+{
+  "model_path": "rmanluo/GCR-Meta-Llama-3.1-8B-Instruct",
+  "data_path": "rmanluo",
+  "datasets": [
+    "RoG-webqsp",
+    "RoG-cwq"
+  ],
+  "split": "test",
+  "index_len": 2,
+  "k": 10,
+  "gen_mode": "group-beam",
+  "prompt_mode": "zero-shot",
+  "max_new_tokens": 256,
+  "max_samples": 1,
+  "method": "all",
+  "attn_impl": "sdpa",
+  "gpu": "NVIDIA GeForce RTX 4090",
+  "sample_timeout_s": 120
+}

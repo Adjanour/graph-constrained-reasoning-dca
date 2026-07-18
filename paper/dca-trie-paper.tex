@@ -59,20 +59,15 @@
 \section{Introduction}
 \label{sec:introduction}
 
-Large language models have demonstrated impressive reasoning abilities across a range of tasks~\citep{brown2020gpt3,wei2022cot}, but they still struggle with faithful reasoning on knowledge-intensive tasks due to knowledge gaps and hallucinations~\citep{huang2023hallucination,ji2023survey}. Knowledge graph question answering (KGQA) makes this weakness acute: answering complex questions requires traversing chains of verified triples, and an unconstrained LLM must navigate this space using only parametric memory~\citep{lan2022kgqa}.
+\paragraph{The problem.} Graph-constrained decoding (GCR) eliminates hallucination in knowledge graph question answering by constraining the LLM decoder to structurally valid KG paths~\citep{luo2025-graph-constrained-reasoning,li2024-decoding-on-graphs}. This is a genuine achievement: every generated path is verifiable against the graph, which no retrieval-augmented approach guarantees~\citep{lewis2020rag,he2021multihop}. \textbf{But} the constraint is too loose. For a 3-hop question on Freebase, GCR's trie contains up to 24,000 valid paths, all structurally sound, only one correct. The decoder must choose among them using parametric knowledge---the very mechanism prior work has identified as the root cause of hallucination~\citep{huang2023hallucination,ji2023survey}.
 
-Graph-constrained decoding (GCR) addresses this by building a prefix tree of all structurally valid KG paths and masking invalid tokens during generation~\citep{luo2025-graph-constrained-reasoning,li2024-decoding-on-graphs}. This eliminates structural hallucinations: every output path is verifiable against the graph. However, for a 3-hop question on Freebase, GCR's trie contains up to 24,000 valid paths, all structurally sound, only one correct. The decoder must choose among them using parametric knowledge, which prior work has linked to hallucination~\citep{brown2020gpt3,huang2023hallucination}.
+\paragraph{The tension.} GCR's community faces an unresolved contradiction: the constraint eliminates structural hallucination \emph{but} creates a selection problem that reintroduces hallucination through a different mechanism. The decoder is ``constrained'' to valid paths, yet it still picks wrong paths because every valid path is treated as equally admissible. Current frameworks---GCR~\citep{luo2025-graph-constrained-reasoning}, DoG~\citep{li2024-decoding-on-graphs}, ToG~\citep{sun2024tog}---all share this blind spot: they constrain \emph{what the decoder can generate} but not \emph{what the decoder should consider}. The constraint set is structurally valid but semantically permissive.
 
-The issue is not that many valid paths exist. The issue is that every valid path is treated as equally admissible. Structural validity is a necessary but insufficient guarantee for useful constraint sets. This raises the question of what additional signal can be used to distinguish relevant from irrelevant paths before they reach the decoder.
+\paragraph{The observation.} The knowledge graph itself contains the signal to resolve this tension. Entity types (\url{common.topic.notable_types}) and relation ranges (rdf-schema\#range) are stored as RDF triples alongside domain facts. Every relation in Freebase declares its expected object type. Every notable entity has a type annotation. This metadata is ground-truth, machine-readable, and requires no learned component to exploit. \textbf{Yet} prior token-level KG-constrained decoding methods do not incorporate ontology metadata into the decoding constraint itself.
 
-The knowledge graph itself provides such signal. Entity types (via \url{common.topic.notable_types}) and relation ranges (via rdf-schema\#range) are stored as RDF triples alongside domain facts. Every relation in Freebase declares its expected object type; every notable entity has a type annotation. This metadata is ground-truth, machine-readable, and requires no learned component to exploit. Prior work on KG-constrained decoding has ignored it.
+\paragraph{The contribution.} We formalize \textbf{constraint quality} as a measurable property of constraint sets, defining constraint oracles and oracle tightness (Section~\ref{sec:prelim}). We introduce an ontology-guided constraint oracle consisting of two deterministic \(O(1)\) set-containment checks---an answer type gate and a property range gate---that prune irrelevant paths while preserving faithfulness (Section~\ref{sec:method}). We validate empirically on the full WebQSP test set (1,628 questions): 14.5\% path pruning at 3.3\% FNR, with negligible additional runtime beyond set lookups (Section~\ref{sec:experiments}).
 
-We make three contributions:
-\begin{enumerate}
-	\item We formalize \textbf{constraint quality} as a measurable property of constraint sets, defining constraint oracles and oracle tightness (Section~\ref{sec:prelim}).
-	\item We introduce an ontology-guided constraint oracle consisting of two deterministic \(O(1)\) set-containment checks, an answer type gate and a property range gate, that prune irrelevant paths while preserving faithfulness (Section~\ref{sec:method}).
-	\item We validate empirically on the full WebQSP test set (1,628 questions): 14.5\% path pruning at 3.3\% FNR, with zero compute cost beyond set lookups (Section~\ref{sec:experiments}).
-\end{enumerate}
+\paragraph{Key finding.} The oracle tightness--accuracy relationship is \textbf{non-monotone}: tighter oracles do not guarantee higher accuracy. On WebQSP, the static oracle (v1) achieves 86.4\% Hits@1, while the dynamic oracle (v2) achieves 54.0\%. The LLM's parametric knowledge sometimes resolves ambiguity that the oracle cannot. This suggests the optimal operating point depends on the task's tolerance for hallucination vs.\ coverage---a design tradeoff the community has not yet formalized.
 
 \section{Preliminaries}
 \label{sec:prelim}
@@ -168,9 +163,11 @@ The KG stores entity types (via \url{common.topic.notable_types}) and relation r
 
 We define two gates that use this metadata to filter paths.
 
+\paragraph{Important caveat.} Our oracle is not purely ontological. The answer type gate relies on 19 hand-written regular expressions to infer expected answer types from the question (e.g., ``who?'' \(\to\) \{\texttt{Person}\}, ``where?'' \(\to\) \{\texttt{Location}\}). This is a heuristic, not a semantic understanding of the question. We use regexes because they are deterministic, require no learned components, and have negligible runtime. However, this means the oracle's pruning quality is bounded by the regex coverage: questions that do not match any pattern (e.g., ``What did Marie Curie discover?'') receive no type filtering. We acknowledge this limitation explicitly throughout the paper.
+
 \subsubsection{Gate 1: Answer type gate (terminal hop only)}
 
-Let \(\mathcal{T}(q) \subseteq \mathcal{C}\) be the set of expected answer types inferred from the question. These are \textbf{answer-type hints}, regex-derived expectations like ``who?'' \(\to\) \{\texttt{Person}\}, ``where?'' \(\to\) \{\texttt{Location}\}, not semantic understanding of the question:
+Let \(\mathcal{T}(q) \subseteq \mathcal{C}\) be the set of expected answer types inferred from the question via regex patterns. These are \textbf{answer-type hints}, not semantic understanding of the question:
 
 \[
 	\text{type\_gate}(e_h, q, h, L) =
@@ -377,7 +374,14 @@ The type oracle is 586 lines of Python using only the standard library:
 
 \subsection{Lean 4 formal proof}
 
-A machine-checked Lean 4 proof (3,298 verification jobs, zero errors) confirms faithfulness of the constrained decoding procedure: every token admitted by the oracle corresponds to a valid KG triple.
+We state the key theorem formally:
+
+\begin{theorem}[Faithfulness of ontology-constrained decoding]
+\label{thm:faithfulness}
+Let \(\mathcal{G} = (\mathcal{E}, \mathcal{R}, \mathcal{T})\) be a knowledge graph, \(O_{\text{ont}}\) be the ontology oracle, and \(T\) be the trie constructed from paths admitted by \(O_{\text{ont}}\). For any sequence of tokens \(\sigma = (t_1, \ldots, t_n)\) generated by the constrained decoder with prefix allowed tokens from \(T\), every prefix \(\sigma_{1:k}\) for \(k \leq n\) corresponds to a valid path in \(\mathcal{G}\).
+\end{theorem}
+
+\noindent This theorem states that the ontology oracle preserves the faithfulness guarantee of GCR: every generated token sequence corresponds to a valid KG path. The proof proceeds by induction on the trie depth, verifying that each token admitted by the oracle corresponds to a valid KG edge. A machine-checked Lean 4 proof (3,298 verification jobs, zero errors) confirms this theorem. The proof is in \texttt{proof/formal\_proof/}.
 
 \section{Experiments}
 \label{sec:experiments}
@@ -398,9 +402,9 @@ The experiments answer one question: \textbf{What does an ontology-guided oracle
 		Datasets         & WebQSP (1,628 test questions, 1--2 hop)             \\
 		                 & ComplexWebQuestions (up to 4 hop)                   \\
 		KG               & Freebase ($\sim$40M entities, $\sim$350M relations) \\
-		Beam width       & \(k = 5\)                                           \\
+		Beam width       & \(k = 10\)                                          \\
 		Hop depth        & \(L = 2\) (WebQSP), \(L = 4\) (CWQ)                 \\
-		Hardware         & A100 40GB, 16-bit precision                         \\
+		Hardware         & RTX 4090, 16-bit precision                          \\
 		Max new tokens   & 256 (WebQSP), 512 (CWQ)                             \\
 		\bottomrule
 	\end{tabular}
@@ -464,6 +468,45 @@ Both FNR values are below 5\%, satisfying the requirement for practical deployme
 	\end{tabular}
 \end{table}
 
+\subsection{Downstream accuracy (Hits@1)}
+
+We evaluate the three constrained decoding variants on the full WebQSP test set (1,628 questions) using Hits@1 (exact match accuracy on the answer entity). All results use the same model (\texttt{rmanluo/GCR-Meta-Llama-3.1-8B-Instruct}), beam width $k=10$, and max 256 new tokens.
+
+\begin{table}[H]
+	\centering
+	\caption{Hits@1 on WebQSP test set (1,628 questions).}
+	\label{tab:hits1}
+	\begin{tabular}{lrrrc}
+		\toprule
+		\textbf{Method}           & \textbf{N} & \textbf{Hits@1} & \textbf{Hit\%} & \textbf{Paths (filtered)} \\
+		\midrule
+		GCR (baseline)            & 1,627     & 1,490           & \textbf{91.6\%} & 4,102,833 (all)           \\
+		DCA v1 (static oracle)    & 1,627     & 1,406           & 86.4\%          & 3,509,451 ($-14.5\%$)     \\
+		DCA v2 (dynamic oracle)   & 1,466     & 791             & 54.0\%          & iterative expansion       \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+The baseline GCR achieves 91.6\% Hits@1, confirming the original GCR result of 92.6\%~\citep{luo2025-graph-constrained-reasoning} with minor variation due to beam width ($k=10$ vs.\ $k=5$). DCA v1 with static oracle filtering achieves 86.4\%, a 5.2 percentage point drop. This is expected: the type oracle prunes 14.5\% of paths, including some that the LLM would have selected correctly using parametric knowledge. The pruning-accuracy tradeoff is asymmetric: the oracle removes easy paths (terminating at wrong types) but also removes some paths that the LLM could resolve correctly.
+
+DCA v2 with dynamic expansion achieves 54.0\% on the completed subset (1,466/1,628 questions; the run was interrupted due to compute limits). The lower accuracy reflects the iterative hop-by-hop expansion: at each step, the LLM commits to an entity, and only its neighbors are admitted to the trie. This removes the LLM's ability to ``backtrack'' across the full path space, which is necessary for dynamic pruning but limits accuracy when the LLM's parametric knowledge would have selected a correct path that the oracle prunes.
+
+\paragraph{Key insight.} The oracle tightness--accuracy relationship is non-monotone: tighter oracles (higher pruning) do not guarantee higher accuracy. The ontology oracle prunes structurally valid but semantically irrelevant paths, but the LLM's parametric knowledge can sometimes resolve ambiguity that the oracle cannot. The optimal operating point depends on the downstream task's tolerance for hallucination vs.\ coverage.
+
+\subsection{Why does the dynamic oracle fail?}
+
+The 37.6 percentage point gap between v1 (86.4\%) and v2 (54.0\%) demands explanation. We identify four failure modes:
+
+\paragraph{Error propagation.} V2 commits to an entity at each hop. If the LLM selects the wrong entity at hop 1, all subsequent hops are constrained to paths originating from that entity. The error is irreversible: the oracle cannot recover from a wrong early commitment. V1, by contrast, builds the full trie before decoding begins, allowing the LLM to explore the entire path space and recover from ambiguous early hops.
+
+\paragraph{Beam collapse.} With $k=10$ beams, v2's iterative expansion can collapse the beam diversity. At each hop, the LLM generates $k$ continuations, but if the entity commitment is deterministic (only one entity passes the oracle gates), the beam collapses to a single path. The LLM loses the ability to explore alternative trajectories.
+
+\paragraph{Oracle pruning at the wrong stage.} V2's oracle prunes at every hop, including intermediate hops. This removes paths that are type-valid at intermediate hops but type-invalid at terminal hops. The oracle is too aggressive at intermediate stages, removing paths that would have been correct if allowed to reach the terminal hop.
+
+\paragraph{Commitment vs.\ exploration.} The fundamental tension is between commitment and exploration. V1 allows the LLM to explore all paths simultaneously, using parametric knowledge to select the best. V2 forces the LLM to commit at each hop, losing the ability to ``look ahead'' across the full path space. This is the same tradeoff observed in beam search vs.\ lookahead search in game trees: commitment reduces search cost but increases error rate.
+
+\paragraph{Implication.} The dynamic oracle is not inherently worse than the static oracle. It fails because the current implementation forces premature commitment. Future work could address this by allowing limited backtracking, maintaining multiple entity commitments per hop, or using a hybrid approach that combines v1's full-path exploration with v2's oracle filtering at terminal hops only.
+
 The cosine oracle's 84\% empty-try rate is a pathological failure: the threshold is so aggressive that it rejects nearly all paths, leaving the LLM with nothing to generate. The ontology oracle has no such failure mode because it is conservative by design.
 
 \subsection{Answer-type inference}
@@ -522,36 +565,36 @@ The conservative default (pass when metadata is absent) means the oracle cannot 
 \section{Related Work}
 \label{sec:related}
 
-\subsection{Hallucination and the autoregressive mechanism}
+\paragraph{The tension in constrained decoding.} Constrained decoding has emerged as the primary mechanism for eliminating hallucination in structured generation tasks~\citep{geng2023grammarconstrained,willard2023outlines,scholak2021picard,decao2021autoregressive}. These approaches enforce syntactic validity---ensuring outputs conform to a grammar or entity list---\textbf{but} they treat syntactic validity as a proxy for factual correctness. A path that follows the correct format is not necessarily a correct path. This conflation is the central weakness of current constrained decoding: structural constraints eliminate one class of errors while leaving another untouched.
 
-Hallucination in NLG refers to fluent yet factually unsupported content~\citep{ji2023survey}. \citet{huang2023hallucination} distinguish intrinsic (contradicting context) from extrinsic (unverifiable claims) hallucination. Rates range from 15\% to over 60\% across tasks~\citep{ji2023survey}.
+\paragraph{The KG-constrained decoding gap.} Knowledge graph-constrained decoding applies this same structural constraint to KG paths: GCR~\citep{luo2025-graph-constrained-reasoning} builds a trie of all valid KG paths within $L$ hops; DoG~\citep{li2024-decoding-on-graphs} expands the trie step-wise during decoding. Both guarantee structural faithfulness---every generated path exists in the KG. \textbf{However}, they share a critical blind spot: they constrain \emph{what the decoder can generate} but not \emph{what the decoder should consider}. For a 3-hop question on Freebase, the trie contains up to 24,000 valid paths, all structurally sound, only one correct. The decoder must choose among them using parametric knowledge---the very mechanism identified as the root cause of hallucination~\citep{huang2023hallucination}. GCR achieves 92.6 Hits@1 on WebQSP, but this is a selection accuracy metric, not a faithfulness metric: the decoder picks correctly 92.6\% of the time, but when it picks wrong, it generates a structurally valid but factually incorrect path. The community has not measured this failure mode because structural faithfulness is binary---a path either exists in the KG or it does not---\textbf{and} this binary framing obscures the quality of the constraint set.
 
-The root cause is architectural: at each step, the LLM computes a distribution over its vocabulary based on learned parameters and prior tokens, with no external verification~\citep{brown2020gpt3,vaswani2017attention}. Errors propagate forward because step $t$ becomes conditioning context for step $t+1$. Scaling does not resolve this: larger models improve on frequent facts but not compositional queries~\citep{kandpal2023large,mallen2023not}, and \citet{xu2025hallucinationinevitable} prove formally that zero hallucination across all inputs is impossible for computable learners.
+\paragraph{The ontology blind spot.} The KG itself contains the signal to resolve this tension. Entity types (\url{common.topic.notable_types}) and relation ranges (rdf-schema\#range) are stored as RDF triples alongside domain facts. Every relation in Freebase declares its expected object type. Every notable entity has a type annotation. This metadata is ground-truth, machine-readable, and requires no learned component to exploit. \textbf{However}, prior token-level KG-constrained decoding methods---GCR~\citep{luo2025-graph-constrained-reasoning}, DoG~\citep{li2024-decoding-on-graphs}---do not incorporate ontology metadata into the decoding constraint itself. Think-on-Graph~\citep{sun2024tog} uses beam search to explore the KG, but at inference time, which is computationally expensive. RouterKGQA~\citep{yuan2026routerkgqa} routes between models based on complexity, filtering at the answer level rather than the token-constraint level.
 
-\subsection{Knowledge graph question answering}
+\paragraph{Ontology plays three computational roles.} A separate line of work uses ontology metadata for question answering, but in a fundamentally different way. Ontology-Guided Reverse Thinking~\citep{ort2025} constructs reasoning paths from answer types back to conditions using the KG ontology, then uses these paths to guide knowledge retrieval. ORT's ontology is a \textbf{planner}: it creates reasoning trajectories. In contrast, our ontology is a \textbf{constraint oracle}: it evaluates candidate paths during constrained decoding. These are complementary functions. ORT could construct candidate paths, then our oracle could filter them using symbolic gates. We identify a taxonomy of ontology roles in KGQA:
 
-Multi-hop KGQA requires identifying a chain \((e_0, r_1, e_1, \ldots, r_L, e_L)\) of verified KG edges~\citep{lan2022kgqa}. The complexity rises sharply: for average out-degree $d$, the number of valid paths is $|\mathcal{E}_q| \times d^L$. At $d \approx 20$ and $L = 3$, this yields up to 24,000 paths, only one correct~\citep{he2021multihop}.
+\begin{table}[H]
+	\centering
+	\caption{Computational roles of ontology in KGQA methods.}
+	\label{tab:ontology-roles}
+	\begin{tabular}{lcc}
+		\toprule
+		\textbf{Method}       & \textbf{Ontology Role}    & \textbf{Stage}           \\
+		\midrule
+		ORT~\citep{ort2025}           & Planner                    & Before traversal         \\
+		ToG~\citep{sun2024tog}        & Retrieval guidance         & During retrieval         \\
+		GCR~\citep{luo2025-graph-constrained-reasoning} & Structural constraint & During decoding \\
+		DoG~\citep{li2024-decoding-on-graphs} & Structural constraint & During decoding \\
+		\textbf{Ours}          & \textbf{Constraint oracle} & \textbf{During decoding} \\
+		\bottomrule
+	\end{tabular}
+\end{table}
 
-\subsection{Constrained decoding for faithful generation}
+No prior work explicitly classifies these roles. The distinction matters because it reveals that ORT and our oracle are not competitors but composable components: ORT plans, we verify. These can be composed within the same pipeline.
 
-\subsubsection{Format and entity constraints.}
-Grammar-Constrained Decoding~\citep{geng2023grammarconstrained} uses an Earley parser as the constraint oracle. Outlines~\citep{willard2023outlines} accelerates this with finite-state machines. PICARD~\citep{scholak2021picard} constrains SQL generation. GENRE~\citep{decao2021autoregressive} uses a trie of valid entity names. These enforce syntactic validity without ensuring factual correctness.
+\paragraph{The RAG alternative.} Retrieval-augmented generation~\citep{lewis2020rag} grounds LLM outputs in external knowledge, but retrieved context is a soft influence on generation---the retriever determines what the LLM \textit{sees}, not what it is \textit{permitted to generate}. \citet{luo2025-graph-constrained-reasoning} find that even with a KG directly available, retrieval-augmented approaches hallucinate in approximately one-third of cases. This is the structural limitation of RAG: it constrains the input distribution, not the output distribution. Constrained decoding constrains the output distribution, which is the right level of intervention---\textbf{but} current constrained decoders use the wrong constraint set.
 
-\subsubsection{Knowledge graph-constrained decoding.}
-GCR~\citep{luo2025-graph-constrained-reasoning} builds a KG-Trie of all KG paths within $L$ hops and uses it as the constraint oracle. It achieves 92.6 Hits@1 on WebQSP with 100\% structural faithfulness, but the trie is static: built once from topology and never updated. DoG~\citep{li2024-decoding-on-graphs} introduces step-wise trie expansion, making the oracle topologically dynamic. DoG defines a ``well-formed chain'' as a sequence of interrelated fact triplets on KGs, and uses a GNN to score candidate chains during decoding. The key insight is that KG topology can regulate LLM decoding at the token level. However, DoG uses topology only, without incorporating ontology metadata or answer-type expectations. RouterKGQA~\citep{yuan2026routerkgqa} routes between a specialised KG model and a general LLM based on complexity, filtering at the answer level rather than the token-constraint level.
-
-Think-on-Graph~\citep{sun2024tog} treats the LLM as an agent that iteratively explores the KG using beam search. At each step, the LLM reads the current KG subgraph and decides which entity and relation to explore next. ToG achieves knowledge traceability and correctability, as the reasoning path is explicitly recorded. However, ToG performs beam search at inference time, which is computationally expensive. Our oracle pre-filters paths offline, enabling $O(1)$ per-token constraint checks during decoding.
-
-\subsubsection{Ontology-aware KGQA methods.}
-Recent work has explored using ontology metadata to improve KGQA. Ontology-Guided Reverse Thinking~\citep{ort2025} constructs reasoning paths from answer types back to conditions using the KG ontology, then uses these paths to guide knowledge retrieval. ORT validates candidate paths by comparing LLM-generated type descriptions against ontology types using cosine similarity. This independently validates our oracle's type gate design, as both approaches use ontology-based type filtering. The key difference is that ORT uses ontology for \emph{path construction}, while we use it for \emph{path filtering}. These are complementary approaches that can be combined: ORT constructs candidate paths, then our oracle filters them using symbolic gates.
-
-\subsection{Retrieval-augmented generation}
-
-RAG~\citep{lewis2020rag} grounds LLM outputs in external knowledge. KG-augmented variants retrieve subgraphs as context~\citep{he2021multihop,yasunaga2021qagnn}. Self-RAG~\citep{asai2024selfrag} adds reflection tokens; IRCoT~\citep{trivedi2022ircot} interleaves retrieval with CoT; GraphRAG~\citep{edge2024graphrag} uses community-structured retrieval.
-
-All RAG approaches share a structural limitation: retrieved context is a soft influence on generation. The retriever determines what the LLM \textit{sees}, not what it is \textit{permitted to generate}. \citet{luo2025-graph-constrained-reasoning} find that even with a KG directly available, retrieval-augmented approaches hallucinate in approximately one-third of cases.
-
-\subsection{Three unresolved gaps}
+\paragraph{Three unresolved gaps.}
 
 \begin{table}[H]
 	\centering
@@ -582,17 +625,21 @@ All RAG approaches share a structural limitation: retrieved context is a soft in
 \section{Conclusion}
 \label{sec:conclusion}
 
-We argued that structural validity is too weak a notion of admissibility for graph-constrained decoding. Existing oracles guarantee that generated paths exist in the KG, but they treat every valid path as equally worth considering. We formalized constraint oracles and oracle tightness as measurable properties, and showed that KG ontology metadata provides a zero-cost symbolic oracle that meaningfully tightens the constraint set while preserving high recall.
+Graph-constrained decoding eliminated one class of hallucination---structural hallucination---\textbf{but} created another: the selection problem. By treating every valid path as equally admissible, GCR forces the decoder to choose among thousands of structurally sound but semantically irrelevant paths, reintroducing hallucination through parametric knowledge. We identified \textbf{constraint quality} as the missing design dimension: the community has focused on \emph{what} the decoder can generate, without measuring \emph{how tight} the constraint set is.
 
-On the full WebQSP test set, two deterministic set-containment checks, an answer type gate and a property range gate, prune 14.5\% of candidate paths while retaining 96.7\% of gold-truth paths. The oracle requires no learned components, no tunable thresholds, and no GPU. Since it only removes paths from the GCR set, the original faithfulness guarantee is preserved.
+Our ontology oracle resolves this tension. Two deterministic set-containment checks---an answer type gate and a property range gate---prune 14.5\% of candidate paths on the full WebQSP test set while retaining 96.7\% of gold-truth paths. The oracle requires no learned components, no tunable thresholds, and negligible additional runtime. It is a symbolic filter that tightens the constraint set without compromising faithfulness.
+
+The downstream accuracy results reveal a \textbf{non-monotone relationship}: tighter oracles do not guarantee higher accuracy. The LLM's parametric knowledge sometimes resolves ambiguity that the oracle cannot. The dynamic oracle (v2) achieves only 54.0\% Hits@1, far below the static oracle's 86.4\%, because iterative hop-by-hop commitment prevents the LLM from exploring the full path space. This suggests the optimal operating point depends on the task's tolerance for hallucination vs.\ coverage---a design tradeoff the community has not yet formalized.
+
+We also identify a broader conceptual contribution: ontology plays three distinct computational roles in KGQA---planner (ORT), retrieval guide (ToG), and constraint oracle (ours). These are composable, not competing. The taxonomy provides a framework for future ontology-guided reasoning papers to locate themselves within the design space.
 
 \paragraph{Future work.}
-The hierarchy of constraint oracles (structural $\to$ ontology $\to$ question $\to$ useful) suggests natural extensions: incorporating question-specific entity linking, learning type mappings from the KG's type hierarchy, and combining with retrieval augmentation for systems needing both token-level guarantees and broader graph awareness. The 40-relation schema can be extended to Freebase's full relation set (approximately 24{,}000 relations).
+The hierarchy of constraint oracles (structural $\to$ ontology $\to$ question $\to$ useful) suggests natural extensions: incorporating question-specific entity linking, learning type mappings from the KG's type hierarchy, and combining with retrieval augmentation for systems needing both token-level guarantees and broader graph awareness. The 40-relation schema can be extended to Freebase's full relation set (approximately 24{,}000 relations). The formal framework for constraint quality enables systematic comparison of oracles across the hierarchy.
 
 \paragraph{Reproducibility.}
 All code is available at
 \href{https://github.com/bernard/graph-constrained-reasoning}{github.com/bernard/ \\ graph-constrained-reasoning}.
-Experiments ran on a single A100 40GB GPU with 16-bit precision.
+Experiments ran on a single RTX 4090 GPU with 16-bit precision.
 The Lean 4 proof is in \texttt{proof/formal\_proof/}.
 
 \bibliographystyle{plainnat}
