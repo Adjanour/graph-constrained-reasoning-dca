@@ -151,4 +151,18 @@ def dca_v2_generate(
         else:
             break
 
+    # Extract terminal entity as answer candidate (for compute_hits compatibility)
+    terminal = _extract_terminal_entity(output_text)
+    if terminal:
+        output_text += f"\n# Answer:\n{terminal}"
+
     return output_text
+
+
+def _extract_terminal_entity(path_text: str) -> str | None:
+    """Extract the last entity from a path like ``<PATH>... -> E</PATH>``."""
+    clean = path_text.replace(PATH_START, "").replace(PATH_END, "").strip()
+    if not clean:
+        return None
+    segments = [s.strip() for s in clean.split(" -> ")]
+    return segments[-1] if len(segments) >= 3 else None
