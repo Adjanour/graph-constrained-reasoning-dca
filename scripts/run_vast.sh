@@ -55,6 +55,7 @@ while [[ $# -gt 0 ]]; do
         --disk)    DISK_SIZE="$2"; shift 2 ;;
         --region)  REGION="$2"; shift 2 ;;
         --experiment) EXPERIMENT="$2"; shift 2 ;;
+        --search-only) SEARCH_ONLY=1; shift ;;
         --help|-h) head -25 "$0" | grep '^#' | sed 's/^# *//' ; exit 0 ;;
         *)         EXTRA_ARGS+=("$1"); shift ;;
     esac
@@ -79,31 +80,24 @@ for cmd in ssh scp jq; do
     fi
 done
 
-# vastai may be installed globally or inside a uv venv — try both
-# (must run from PROJECT_ROOT so `uv run` finds the right venv)
+# vastai: try uv-available first, then global (mise shims can be broken)
 cd "$PROJECT_ROOT"
 VASTAI=""
-if command -v vastai &>/dev/null; then
-    VASTAI="vastai"
-elif command -v uv &>/dev/null; then
+if command -v uv &>/dev/null; then
     if uv run vastai search offers "gpu_name=RTX_4090 num_gpus=1" --order dph --raw &>/dev/null 2>&1; then
         VASTAI="uv run vastai"
     elif uv run python -m vastai search offers "gpu_name=RTX_4090 num_gpus=1" --order dph --raw &>/dev/null 2>&1; then
         VASTAI="uv run python -m vastai"
     fi
 fi
-
-if [ -z "$VASTAI" ]; then
-    echo "ERROR: 'vastai' not found."
-    echo "  → uv pip install vastai"
-    echo "  → uv run vastai set api-key YOUR_API_KEY"
-    exit 1
+if [ -z "$VASTAI" ] && command -v vastai &>/dev/null; then
+    VASTAI="vastai"
 fi
 
-# Check API key is set (search offers is read-only, good for auth check)
-if ! $VASTAI search offers "gpu_name=RTX_4090 num_gpus=1" --order dph --raw &>/dev/null 2>&1; then
-    echo "ERROR: API key not set or invalid. Run:"
-    echo "  uv run vastai set api-key YOUR_API_KEY"
+if [ -z "$VASTAI" ]; then
+    echo "ERROR: 'vastai' not found or not working."
+    echo "  → cd $(pwd) && uv pip install vastai"
+    echo "  → uv run vastai set api-key YOUR_API_KEY"
     exit 1
 fi
 
@@ -160,6 +154,11 @@ if [ -z "$OFFER_ID" ]; then
     # Show the selected offer details
     OFFER_DETAILS=$(echo "$CANDIDATES" | jq -r ".[] | select(.id == $OFFER_ID) | \"  ID: \\(.id)  Price: \\(.dph_total)/hr  Location: \\(.geolocation)  Reliability: \\(.reliability)\"")
     echo "$OFFER_DETAILS"
+    if [ "${SEARCH_ONLY:-0}" = "1" ]; then
+        echo ""
+        echo "Search-only mode. Skipping rent (--search-only)"
+        exit 0
+    fi
 else
     echo ""
     echo "→ Using offer: $OFFER_ID"
