@@ -152,6 +152,7 @@ def constrained_generate(model, input_builder, data, trie):
             eos_token_id=model.tokenizer.eos_token_id,
             pad_token_id=model.tokenizer.pad_token_id or model.tokenizer.eos_token_id,
             prefix_allowed_tokens_fn=gcr.allowed_tokens_fn,
+            trust_remote_code=True,
         )
 
     if len(res.sequences) == 1:
