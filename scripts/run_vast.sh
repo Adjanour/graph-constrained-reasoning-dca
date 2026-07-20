@@ -44,6 +44,7 @@ RESULTS_DIR="$PROJECT_ROOT/results_from_vast"
 OFFER_ID=""
 GPU_FILTER="RTX_4090"
 REGION=""
+EXPERIMENT="main"   # main | 4ideas | adaptive-budget
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -53,6 +54,7 @@ while [[ $# -gt 0 ]]; do
         --image)   DOCKER_IMAGE="$2"; shift 2 ;;
         --disk)    DISK_SIZE="$2"; shift 2 ;;
         --region)  REGION="$2"; shift 2 ;;
+        --experiment) EXPERIMENT="$2"; shift 2 ;;
         --help|-h) head -25 "$0" | grep '^#' | sed 's/^# *//' ; exit 0 ;;
         *)         EXTRA_ARGS+=("$1"); shift ;;
     esac
@@ -63,6 +65,7 @@ echo "  Vast.ai DCA-Trie Orchestrator"
 echo "========================================"
 echo "GPU: $GPU_FILTER  Disk: ${DISK_SIZE}GB  Region: ${REGION:-any}"
 echo "Docker: $DOCKER_IMAGE"
+echo "Experiment: $EXPERIMENT"
 echo "Results: $RESULTS_DIR"
 echo "Args: ${EXTRA_ARGS[*]:-none}"
 echo "========================================"
@@ -77,18 +80,30 @@ for cmd in ssh scp jq; do
 done
 
 # vastai may be installed globally or inside a uv venv — try both
+# (must run from PROJECT_ROOT so `uv run` finds the right venv)
+cd "$PROJECT_ROOT"
+VASTAI=""
 if command -v vastai &>/dev/null; then
     VASTAI="vastai"
-elif command -v uv &>/dev/null && uv run vastai show user &>/dev/null 2>&1; then
-    VASTAI="uv run vastai"
-else
+elif command -v uv &>/dev/null; then
+    if uv run vastai search offers "gpu_name=RTX_4090 num_gpus=1" --order dph --raw &>/dev/null 2>&1; then
+        VASTAI="uv run vastai"
+    elif uv run python -m vastai search offers "gpu_name=RTX_4090 num_gpus=1" --order dph --raw &>/dev/null 2>&1; then
+        VASTAI="uv run python -m vastai"
+    fi
+fi
+
+if [ -z "$VASTAI" ]; then
     echo "ERROR: 'vastai' not found."
-    echo "  → pip install vastai  (or)  uv pip install vastai"
+    echo "  → uv pip install vastai"
+    echo "  → uv run vastai set api-key YOUR_API_KEY"
     exit 1
 fi
 
-if ! $VASTAI show user &>/dev/null 2>&1; then
-    echo "ERROR: API key not set. Run: vastai set api-key YOUR_API_KEY"
+# Check API key is set (search offers is read-only, good for auth check)
+if ! $VASTAI search offers "gpu_name=RTX_4090 num_gpus=1" --order dph --raw &>/dev/null 2>&1; then
+    echo "ERROR: API key not set or invalid. Run:"
+    echo "  uv run vastai set api-key YOUR_API_KEY"
     exit 1
 fi
 
@@ -249,7 +264,7 @@ echo "→ Starting experiment..."
 ssh $SSH_OPTS -p "$SSH_PORT" "root@$SSH_HOST" \
     "cd /workspace/graph-constrained-reasoning && \
      source /venv/main/bin/activate && \
-     nohup bash experiments/type_oracle_full/run.sh ${EXTRA_ARGS[*]:-} \
+     nohup bash experiments/type_oracle_full/run.sh --experiment $EXPERIMENT ${EXTRA_ARGS[*]:-} \
          > /workspace/experiment.log 2>&1 &"
 
 echo "→ Experiment running. Monitoring every ${POLL_EXPERIMENT}s..."

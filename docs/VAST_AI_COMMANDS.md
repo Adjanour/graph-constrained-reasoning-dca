@@ -65,50 +65,42 @@ scp -P PORT -r root@HOST:/workspace/graph-constrained-reasoning/results/ ./resul
 scp -P PORT root@HOST:/workspace/cwq_v2.log ./results_from_vast/
 ```
 
-## 5. Automated Launch (local machine)
+## 5. Automated Launch (local machine, ONE COMMAND)
 
 Full lifecycle: search → rent → setup → run → download → destroy:
 
 ```bash
 cd /home/bernard/research/projects/graph-constrained-reasoning
-source .venv/bin/activate
 
-# Dry run on CWQ
-bash scripts/run_vast.sh --max-samples 10 --datasets RoG-cwq --method all
+# Dry run on WebQSP (10 samples, all methods)
+bash scripts/run_vast.sh --max-samples 10 --dataset RoG-webqsp --experiment 4ideas
 
-# Full v2 on CWQ
-bash scripts/run_vast.sh --datasets RoG-cwq --method v2 --max-samples 999999
+# Dry run with adaptive-budget experiment
+bash scripts/run_vast.sh --max-samples 10 --dataset RoG-webqsp --experiment adaptive-budget
+
+# Full v2 on CWQ (main.py)
+bash scripts/run_vast.sh --dataset RoG-cwq --method v2 --max-samples 999999
+
+# Full 4-ideas run on WebQSP
+bash scripts/run_vast.sh --dataset RoG-webqsp --experiment 4ideas --max-samples 999999
+
+# Full adaptive-budget run on WebQSP
+bash scripts/run_vast.sh --dataset RoG-webqsp --experiment adaptive-budget --max-samples 999999
 ```
 
-## 6. Experiments (updated main)
-
-The 4 ideas experiment script has been updated. Run it instead of `main.py`:
+## 6. Manual SSH (if automated script fails)
 
 ```bash
+# On Vast.ai instance:
+cd /workspace
+git clone https://github.com/Adjanour/graph-constrained-reasoning-dca.git
+cd graph-constrained-reasoning-dca
+pip install -e .
+
+# Run experiment
 python experiments/type_oracle_full/experiment_4_ideas.py \
   --model-path rmanluo/GCR-Meta-Llama-3.1-8B-Instruct \
-  --dataset RoG-webqsp --max-samples 100 \
-  --methods baseline,filtered,validate,adaptive30,adaptive100,adaptive500,label-plan \
-  --output-dir results/4_ideas_full_run
-```
-
-## 7. Adaptive Budget Experiment (with v2 premium comparator)
-
-Tests 3 tiers: budget (adaptive30/100/500), smart (adaptive-budget), premium (v2 dynamic):
-
-```bash
-# Dry run on CWQ (10 samples, all methods)
-python experiments/type_oracle_full/experiment_adaptive_budget.py \
-  --model-path rmanluo/GCR-Meta-Llama-3.1-8B-Instruct \
-  --dataset RoG-cwq --max-samples 10 \
-  --methods baseline,adaptive30,adaptive100,adaptive500,adaptive-budget,v2 \
-  --output-dir results/adaptive_budget_dryrun
-
-# Full run on WebQSP (~2K questions)
-nohup python experiments/type_oracle_full/experiment_adaptive_budget.py \
-  --model-path rmanluo/GCR-Meta-Llama-3.1-8B-Instruct \
-  --dataset RoG-webqsp --max-samples 999999 \
-  --methods baseline,adaptive30,adaptive100,adaptive500,adaptive-budget,v2 \
-  --output-dir results/adaptive_budget_webqsp \
-  > /workspace/adaptive_budget_webqsp.log 2>&1 &
+  --dataset RoG-webqsp --max-samples 10 \
+  --methods baseline,filtered,label-plan \
+  --output-dir results/dryrun_4ideas
 ```

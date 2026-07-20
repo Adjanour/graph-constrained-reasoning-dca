@@ -1,53 +1,87 @@
 #!/usr/bin/env bash
-# run.sh — one-shot entry point for the DCA-Trie experiment.
+# run.sh — one-shot entry point for all DCA-Trie experiments.
 #
 # Usage:
-#   bash experiments/type_oracle_full/run.sh                     # 50 samples, both datasets, all methods
-#   bash experiments/type_oracle_full/run.sh --full               # full test set
-#   bash experiments/type_oracle_full/run.sh --method v1          # v1 only
-#   bash experiments/type_oracle_full/run.sh --datasets RoG-webqsp           # webqsp only
-#   bash experiments/type_oracle_full/run.sh --datasets RoG-cwq              # cwq only
-#   bash experiments/type_oracle_full/run.sh --datasets RoG-webqsp RoG-cwq   # both
-#   bash experiments/type_oracle_full/run.sh --max-samples 10
+#   bash run.sh                                           # default: main.py, 50 samples, both datasets
+#   bash run.sh --experiment main                         # main.py (baseline/v1/v2)
+#   bash run.sh --experiment 4ideas                       # experiment_4_ideas.py
+#   bash run.sh --experiment adaptive-budget              # experiment_adaptive_budget.py
+#   bash run.sh --full                                    # full test set (999999 samples)
+#   bash run.sh --method v1                               # v1 only
+#   bash run.sh --dataset RoG-webqsp                      # single dataset
+#   bash run.sh --dataset RoG-cwq --max-samples 10        # quick test
 #
 # Tip: Run one dataset at a time to avoid losing progress if interrupted.
-#   bash experiments/type_oracle_full/run.sh --datasets RoG-webqsp --full
-#   bash experiments/type_oracle_full/run.sh --datasets RoG-cwq --full
 #
-# All extra arguments are forwarded to run.py.
+# All extra arguments are forwarded to the selected experiment script.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-EXTRA_ARGS=()
+EXPERIMENT="main"
+EXPERIMENT_ARGS=()
 
-# Default to 50 samples unless --full or --max-samples is passed
+# Parse known flags, collect rest into EXPERIMENT_ARGS
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --experiment)
+            case "$2" in
+                main|4ideas|adaptive-budget) EXPERIMENT="$2" ;;
+                *) echo "ERROR: Unknown experiment '$2'. Choices: main, 4ideas, adaptive-budget"; exit 1 ;;
+            esac
+            shift 2
+            ;;
+        --dataset)
+            EXPERIMENT_ARGS+=("--dataset" "$2")
+            shift 2
+            ;;
+        --help|-h)
+            head -20 "$0" | grep '^#' | sed 's/^# *//'
+            exit 0
+            ;;
+        *)
+            EXPERIMENT_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Default to 50 samples unless --max-samples or --full is passed
 has_max_samples=false
-for arg in "$@"; do
+for arg in "${EXPERIMENT_ARGS[@]}"; do
     case "$arg" in
         --max-samples|--full) has_max_samples=true ;;
     esac
 done
-
 if [ "$has_max_samples" = false ]; then
-    EXTRA_ARGS+=("--max-samples" "50")
+    EXPERIMENT_ARGS+=("--max-samples" "50")
 fi
-
-# Translate --full into a large --max-samples (main.py doesn't have --full)
-for arg in "$@"; do
-    if [ "$arg" = "--full" ]; then
-        EXTRA_ARGS+=("--max-samples" "999999")
-    else
-        EXTRA_ARGS+=("$arg")
+for i in "${!EXPERIMENT_ARGS[@]}"; do
+    if [ "${EXPERIMENT_ARGS[$i]}" = "--full" ]; then
+        EXPERIMENT_ARGS[$i]="--max-samples"
+        EXPERIMENT_ARGS=("${EXPERIMENT_ARGS[@]:0:$((i+1))}" "999999" "${EXPERIMENT_ARGS[@]:$((i+1))}")
+        break
     fi
 done
 
-# Setup
-echo "Running setup..."
-bash "$SCRIPT_DIR/setup.sh"
+Python() {
+    python "$SCRIPT_DIR/$1" "${EXPERIMENT_ARGS[@]}"
+}
 
-# Run
-echo ""
-echo "Starting experiment..."
-python "$SCRIPT_DIR/main.py" "${EXTRA_ARGS[@]}"
+echo "========================================"
+echo "  Experiment: $EXPERIMENT"
+echo "  Args: ${EXPERIMENT_ARGS[*]}"
+echo "========================================"
+
+case "$EXPERIMENT" in
+    main)
+        Python main.py
+        ;;
+    4ideas)
+        Python experiment_4_ideas.py
+        ;;
+    adaptive-budget)
+        Python experiment_adaptive_budget.py
+        ;;
+esac
