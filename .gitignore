@@ -56,3 +56,4 @@ media/
 
 # Demo cache
 demo/__pycache__/
+results_from_vast/
