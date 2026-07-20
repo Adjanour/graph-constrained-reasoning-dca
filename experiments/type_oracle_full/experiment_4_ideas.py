@@ -90,17 +90,10 @@ def constrained_generate(model, input_builder, data, trie):
         res = model.model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            max_new_tokens=getattr(model.generation_cfg, 'max_new_tokens', 256),
-            do_sample=False,
-            num_beams=1,
-            num_return_sequences=1,
-            temperature=None,
-            top_p=None,
-            top_k=None,
-            eos_token_id=model.tokenizer.eos_token_id,
-            pad_token_id=model.tokenizer.eos_token_id,
+            generation_config=model.generation_cfg,
             prefix_allowed_tokens_fn=gcr.allowed_tokens_fn,
             return_dict_in_generate=True,
+            pad_token_id=model.tokenizer.eos_token_id,
         )
     except Exception as e:
         logger.error("Constrained generation failed: %s", e)

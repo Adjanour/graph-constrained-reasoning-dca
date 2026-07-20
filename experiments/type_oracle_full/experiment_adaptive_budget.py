@@ -141,16 +141,9 @@ def constrained_generate(model, input_builder, data, trie):
     with gcr:
         res = model.model.generate(
             **input_ids,
-            max_new_tokens=getattr(model.generation_cfg, 'max_new_tokens', 256),
-            do_sample=False,
-            num_beams=1,
-            num_return_sequences=1,
-            temperature=None,
-            top_p=None,
-            top_k=None,
-            eos_token_id=model.tokenizer.eos_token_id,
-            pad_token_id=model.tokenizer.pad_token_id or model.tokenizer.eos_token_id,
+            generation_config=model.generation_cfg,
             prefix_allowed_tokens_fn=gcr.allowed_tokens_fn,
+            pad_token_id=model.tokenizer.pad_token_id or model.tokenizer.eos_token_id,
         )
 
     if len(res.sequences) == 1:
