@@ -141,7 +141,7 @@ def constrained_generate(model, input_builder, data, trie):
     with gcr:
         res = model.model.generate(
             **input_ids,
-            max_new_tokens=model.generation_cfg.get("max_new_tokens", 256),
+            max_new_tokens=getattr(model.generation_cfg, 'max_new_tokens', 256),
             do_sample=False,
             num_beams=1,
             num_return_sequences=1,

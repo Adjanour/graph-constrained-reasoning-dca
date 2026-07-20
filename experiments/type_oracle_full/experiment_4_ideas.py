@@ -90,7 +90,7 @@ def constrained_generate(model, input_builder, data, trie):
         res = model.model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            max_new_tokens=model.generation_cfg.get("max_new_tokens", 256),
+            max_new_tokens=getattr(model.generation_cfg, 'max_new_tokens', 256),
             do_sample=False,
             num_beams=1,
             num_return_sequences=1,
