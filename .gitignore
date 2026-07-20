@@ -57,3 +57,12 @@ media/
 # Demo cache
 demo/__pycache__/
 results_from_vast/
+
+# Result directories
+ideas_webqsp_full/
+vast_results/
+results_from_vast/
+run_full-*/
+
+# Large files
+*.jsonl
