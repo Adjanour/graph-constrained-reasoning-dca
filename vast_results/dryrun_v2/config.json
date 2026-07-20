@@ -1,0 +1,16 @@
+{
+  "model_path": "rmanluo/GCR-Meta-Llama-3.1-8B-Instruct",
+  "dataset": "RoG-webqsp",
+  "split": "test",
+  "index_len": 2,
+  "k": 10,
+  "gen_mode": "group-beam",
+  "max_new_tokens": 256,
+  "n_samples": 10,
+  "methods": [
+    "baseline",
+    "filtered",
+    "label-plan"
+  ],
+  "gpu": "NVIDIA GeForce RTX 4090"
+}

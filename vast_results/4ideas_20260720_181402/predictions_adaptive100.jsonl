@@ -1,0 +1,10 @@
+{"id": "WebQTest-0", "question": "what does jamaican people speak", "prediction": "", "ground_truth": ["Jamaican English", "Jamaican Creole English Language"], "mode": "adaptive100", "n_paths_all": 3953, "n_paths_used": 100}
+{"id": "WebQTest-1", "question": "what did james k polk do before he was president", "prediction": "", "ground_truth": ["United States Representative", "Governor of Tennessee", "Speaker of the United States House of Representatives"], "mode": "adaptive100", "n_paths_all": 2364, "n_paths_used": 100}
+{"id": "WebQTest-3", "question": "who plays ken barlow in coronation street", "prediction": "", "ground_truth": ["William Roache"], "mode": "adaptive100", "n_paths_all": 1741, "n_paths_used": 100}
+{"id": "WebQTest-6", "question": "where is jamarcus russell from", "prediction": "", "ground_truth": ["Mobile"], "mode": "adaptive100", "n_paths_all": 704, "n_paths_used": 100}
+{"id": "WebQTest-7", "question": "where was george washington carver from", "prediction": "", "ground_truth": ["Diamond"], "mode": "adaptive100", "n_paths_all": 1031, "n_paths_used": 100}
+{"id": "WebQTest-8", "question": "what else did ben franklin invent", "prediction": "", "ground_truth": ["Lightning rod", "Glass harmonica", "Bifocals", "Franklin stove"], "mode": "adaptive100", "n_paths_all": 2945, "n_paths_used": 100}
+{"id": "WebQTest-9", "question": "who was richard nixon married to", "prediction": "", "ground_truth": ["Pat Nixon"], "mode": "adaptive100", "n_paths_all": 2819, "n_paths_used": 100}
+{"id": "WebQTest-12", "question": "who is governor of ohio 2011", "prediction": "", "ground_truth": ["John Kasich", "Ted Strickland", "Return J. Meigs, Jr."], "mode": "adaptive100", "n_paths_all": 3482, "n_paths_used": 100}
+{"id": "WebQTest-13", "question": "who was vice president after kennedy died", "prediction": "", "ground_truth": ["Lyndon B. Johnson"], "mode": "adaptive100", "n_paths_all": 3688, "n_paths_used": 100}
+{"id": "WebQTest-14", "question": "where is the fukushima daiichi nuclear plant located", "prediction": "", "ground_truth": ["Japan", "Okuma"], "mode": "adaptive100", "n_paths_all": 181, "n_paths_used": 100}

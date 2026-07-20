@@ -1,0 +1,42 @@
+{
+  "baseline": {
+    "condition": "baseline",
+    "n": 100,
+    "hits": 78,
+    "hit_at_1": 78.0,
+    "time_s": 145.3,
+    "avg_time_per_q": 1.45,
+    "n_skipped": 0,
+    "n_dead_ends": 0,
+    "n_timeouts": 0,
+    "avg_paths_all": 2552.7
+  },
+  "filtered": {
+    "condition": "filtered",
+    "n": 100,
+    "hits": 77,
+    "hit_at_1": 77.0,
+    "time_s": 143.3,
+    "avg_time_per_q": 1.43,
+    "n_skipped": 0,
+    "n_dead_ends": 0,
+    "n_timeouts": 0,
+    "avg_paths_all": 2552.7,
+    "avg_paths_filtered": 2212.8,
+    "reduction_pct": 13.3
+  },
+  "label-plan": {
+    "condition": "label-plan",
+    "n": 100,
+    "hits": 77,
+    "hit_at_1": 77.0,
+    "time_s": 143.4,
+    "avg_time_per_q": 1.43,
+    "n_skipped": 0,
+    "n_dead_ends": 0,
+    "n_timeouts": 0,
+    "avg_paths_all": 2552.7,
+    "avg_paths_filtered": 2212.8,
+    "reduction_pct": 13.3
+  }
+}

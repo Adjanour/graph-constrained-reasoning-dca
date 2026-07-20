@@ -428,6 +428,7 @@ def analysis_validate(preds, oracle_results):
         "wrong": wrong,
         "caught_wrong": caught_wrong,
         "catch_rate_pct": round(caught_wrong / max(1, wrong) * 100, 1),
+        "false_positives": false_positives,
         "false_positive_rate_pct": round(false_positives / max(1, correct) * 100, 1),
     }
 
