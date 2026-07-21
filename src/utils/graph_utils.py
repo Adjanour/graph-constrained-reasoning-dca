@@ -13,7 +13,7 @@ def build_graph(graph: list, undirected = False) -> nx.DiGraph | nx.Graph:
     return G
 
 
-def dfs(graph, start_node_list, max_length):
+def dfs(graph, start_node_list, max_length, max_paths=50000):
     """
     Find all paths within max_length starting from start_node_list in graph using DFS.
 
@@ -21,15 +21,20 @@ def dfs(graph, start_node_list, max_length):
         graph (nx.DiGraph): Directed graph
         start_node (List[str]): A list of start nodes
         max_length (int): Maximum length of path
+        max_paths (int): Maximum number of paths to return (prevents explosion)
 
     Returns:
         List[List[tuple]]: Find paths
     """
     def dfs_visit(node, path):
+        if len(path_lists) >= max_paths:
+            return
         if len(path) > max_length:
             return
         try:
             for neighbor in graph.neighbors(node):
+                if len(path_lists) >= max_paths:
+                    return
                 rel = graph[node][neighbor]["relation"]
                 new_path = path + [(node, rel, neighbor)]
                 if len(new_path) <= max_length:
