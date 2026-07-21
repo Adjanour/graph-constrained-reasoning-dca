@@ -141,39 +141,6 @@ class OntologyReasoner:
                     current_path + [neighbor]
                 )
 
-    def _expand_to_label_paths(self, category_paths: List[List[str]],
-                               aim_labels: FrozenSet[str],
-                               condition_labels: FrozenSet[str],
-                               max_label_combos: int = 50) -> List[List[str]]:
-        aim_labels_set = set(aim_labels)
-        cond_labels_set = set(condition_labels)
-        result: List[List[str]] = []
-
-        for cp in category_paths:
-            if len(result) >= max_label_combos:
-                break
-            if not cp:
-                continue
-
-            head_cat = cp[0]
-            tail_cat = cp[-1]
-
-            head_labels = _CATEGORY_TO_LABELS.get(head_cat, set()) & aim_labels_set
-            tail_labels = _CATEGORY_TO_LABELS.get(tail_cat, set()) & cond_labels_set
-
-            if not head_labels or not tail_labels:
-                continue
-
-            for h in head_labels:
-                if len(result) >= max_label_combos:
-                    break
-                for t in tail_labels:
-                    if len(result) >= max_label_combos:
-                        break
-                    result.append([h, t])
-
-        return result
-
     def constrained_dfs(self, nx_graph, start_entities: List[str],
                         index_len: int,
                         aim_labels: FrozenSet[str],
@@ -185,13 +152,8 @@ class OntologyReasoner:
         )
 
         if not category_paths:
-            return [], []
-
-        label_paths = self._expand_to_label_paths(
-            category_paths, aim_labels, frozenset(cond_set)
-        )
-
-        if not label_paths:
+            logger.debug("constrained_dfs: no category paths found (aim=%s cond=%s)",
+                         aim_labels, cond_set)
             return [], []
 
         all_paths: Set[Tuple] = set()
@@ -199,18 +161,20 @@ class OntologyReasoner:
             if start not in nx_graph:
                 continue
 
-            for lp in label_paths:
+            for cp in category_paths:
                 if len(all_paths) >= 50000:
                     break
-                self._dfs_label_constrained(
-                    nx_graph, start, [], lp, 0, index_len,
+                self._dfs_cat_constrained(
+                    nx_graph, start, [], cp, 0, index_len,
                     all_paths
                 )
 
-        return list(all_paths), label_paths
+        logger.debug("constrained_dfs: %d category paths → %d entity paths",
+                     len(category_paths), len(all_paths))
+        return list(all_paths), category_paths
 
-    def _dfs_label_constrained(self, graph, node, path, label_path,
-                               label_idx, max_len, all_paths):
+    def _dfs_cat_constrained(self, graph, node, path, cat_path,
+                             cat_idx, max_len, all_paths):
         if len(all_paths) >= 50000:
             return
         if len(path) >= max_len:
@@ -219,19 +183,19 @@ class OntologyReasoner:
         for neighbor in graph.neighbors(node):
             if len(all_paths) >= 50000:
                 return
-            rel = graph[node][neighbor]["relation"]
             neighbor_types = self._oracle.get_types(neighbor)
+            neighbor_cats = self._get_categories(neighbor_types)
 
-            next_label = label_path[min(label_idx + 1, len(label_path) - 1)]
-            if neighbor_types and not (neighbor_types & {next_label}):
+            next_cat = cat_path[min(cat_idx + 1, len(cat_path) - 1)]
+            if neighbor_cats and next_cat not in neighbor_cats:
                 continue
 
-            new_path = path + [(node, rel, neighbor)]
+            new_path = path + [(node, graph[node][neighbor]["relation"], neighbor)]
             if len(new_path) <= max_len:
                 all_paths.add(tuple(new_path))
 
-            next_idx = min(label_idx + 1, len(label_path) - 1)
-            self._dfs_label_constrained(
-                graph, neighbor, new_path, label_path,
+            next_idx = min(cat_idx + 1, len(cat_path) - 1)
+            self._dfs_cat_constrained(
+                graph, neighbor, new_path, cat_path,
                 next_idx, max_len, all_paths
             )
