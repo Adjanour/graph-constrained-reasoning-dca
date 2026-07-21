@@ -19,21 +19,25 @@ class PathReranker:
     def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
         self._model_name = model_name
         self._model = None
-        self._cross_encoder = None
 
     def _lazy_load(self):
         if self._model is not None:
             return
-        from sentence_transformers import CrossEncoder
-        logger.info("Loading CrossEncoder: %s", self._model_name)
-        self._cross_encoder = CrossEncoder(self._model_name)
+        from sentence_transformers import SentenceTransformer
+        import torch
+        logger.info("Loading SentenceTransformer: %s", self._model_name)
+        self._model = SentenceTransformer(self._model_name)
+        if torch.cuda.is_available():
+            self._model = self._model.to("cuda")
 
     def score(self, question: str, paths: List[str]) -> List[float]:
-        """Score each (question, path) pair. Higher = more relevant."""
+        """Score each path by cosine similarity between question and path embeddings."""
         self._lazy_load()
-        pairs = [(question, p) for p in paths]
-        scores = self._cross_encoder.predict(pairs, show_progress_bar=False)
-        return scores.tolist() if hasattr(scores, 'tolist') else list(scores)
+        q_emb = self._model.encode(question, convert_to_tensor=True, show_progress_bar=False)
+        p_embs = self._model.encode(paths, convert_to_tensor=True, show_progress_bar=False)
+        from torch.nn import functional as F
+        scores = F.cosine_similarity(q_emb.unsqueeze(0), p_embs).cpu().tolist()
+        return scores
 
     def rank(self, question: str, paths: List[str]) -> List[Tuple[int, str, float]]:
         """Return paths sorted by relevance score descending."""
