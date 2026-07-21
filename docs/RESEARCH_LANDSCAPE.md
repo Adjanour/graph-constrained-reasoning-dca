@@ -204,6 +204,86 @@ Return fact-checked answer
 2. What's the optimal retry strategy when verification fails?
 3. Can KG verification be generalized with a learned fact-checking model?
 
+### 5.4 [SOTA Paper] "Retrieval-Constrained Decoding: Scaling KG-grounded Generation to Wikidata"
+
+**The unsolved problem**: GCR/DoG achieve zero hallucination but require BFS enumeration over the full KG subgraph — fundamentally limited to small (2-4 hop) subgraphs. BYOKG-RAG/ToG scale to full Wikidata but lose the hallucination guarantee because the LLM agent can still make mistakes during traversal. Nobody has both scale and guarantees.
+
+**The idea**: Train a lightweight retriever (DPR-style bi-encoder) that maps a question → minimal relevant KG subgraph. Build the trie only from that subgraph. This combines GCR's hallucination guarantee with the scalability of retrieval.
+
+**Architecture**:
+```
+Question ─→ Retriever (learned) ─→ Relevant KG subgraph
+                                      ↓
+                              Build trie from subgraph
+                                      ↓
+                              Constrained decoding (GCR/DoG)
+                                      ↓
+                              Hallucination-free answer
+```
+
+**Why this is SOTA-level**:
+1. **Learned retrieval is question-adaptive.** Questions about films retrieve film entities. Questions about people retrieve person entities. No hard-coded heuristics (TypeOracle) or exhaustive enumeration (GCR).
+2. **Scale-agnostic.** Retriever processes the full KG but only returns the relevant subgraph. Works with Freebase, Wikidata, domain-specific KGs equally.
+3. **Composable.** Retriever + constrained decoder are independently trainable. Swap in a better retriever (e.g., ColBERT-v2) without changing the decoder.
+4. **Training signal is intrinsic.** Path that led to correct answer = positive. Path that didn't = negative. Training data is free from prior runs.
+
+**Experimental design**:
+- Retriever: MiniLM/L12 (~200M params) fine-tuned with contrastive loss
+- Training pairs: (question, path) → correct/incorrect (mined from 500q runs)
+- Evaluation: WebQSP, CWQ, GrailQA — compare against GCR (full trie), DoG, BYOKG-RAG
+- Metrics: Hits@1, path recall (did retriever find the gold path?), latency
+
+**Expected result**: 90-91% Hits@1 on WebQSP (matching GCR) with 90% fewer paths (only retrieved subgraph), and crucially — ability to handle KGs 100× larger than what GCR can BFS.
+
+**Feasibility**: 1 GPU, 3 months. The retriever is small. The constrained decoder is off-the-shelf. The data is already collected.
+
+### 5.5 [SOTA Paper] "Test-Time Compute Scaling for KGQA: Generation-Verification Loops"
+
+**The direction the field is heading**: Extended CoT (o1-style reasoning) produces long reasoning traces with internal factoid claims. The KG can verify each claim. No trie, no constrained decoding. Just generation + lightweight triple matching in a loop.
+
+**Architecture**:
+```
+Question → LLM generates CoT with embedded factual claims
+                                    ↓
+                   Extract (subject, relation, object) triples
+                                    ↓
+                       Check each triple against KG
+                                    ↓
+               If mismatch → append correction to context → re-generate
+                                    ↓
+                       Return verified answer + reasoning
+```
+
+**Why this is inevitable**:
+1. Works with API-only models (GPT-4, Claude, Gemini). No model access required.
+2. Benefits from better base models automatically. A better LLM generates better initial answers, only needing spot-checking.
+3. No trie, no constrained decoding infrastructure. Just triple matching — a solved problem.
+
+**Our work's role**: Our `validate` method (caught 23.8% of errors at 95.5% precision) is the primitive version. The SOTA version replaces the regex-based triple extractor with an LLM-based one, adds iterative correction, and evaluates the cost/accuracy tradeoff at different verification budgets.
+
+**Research questions**:
+1. How many verification-retry rounds are optimal? (1 round catches 23.8%, 2-3 rounds might catch 50%+)
+2. Triples vs. atomic facts vs. embedding similarity — what's the best verification granularity?
+3. Does verification generalize to domains where no KG path exists (open-domain QA)?
+
+### 5.6 The Safe Bet: Learned Retrieval + Constrained Decoding
+
+If you want the highest-confidence path to a SOTA publication:
+
+| Component | Technology | Why |
+|-----------|-----------|-----|
+| Retriever | DPR / ColBERT-v2 | Well-understood, trainable on a single GPU |
+| Constrained decoder | GCR / DoG trie | Off-the-shelf, zero hallucination |
+| Training signal | Prior run results | Already collected (500q × 2000 paths = 1M pairs) |
+| Evaluation | WebQSP, CWQ, GrailQA | Standard benchmarks, clear leaderboard |
+
+**Expected timeline**:
+- Month 1: Implement retriever, train on mined data, evaluate path recall
+- Month 2: Integrate with GCR decoder, tune retrieval budget (top-100 vs top-1000 vs top-5000)
+- Month 3: Full eval, write paper, submit to ACL/EMNLP 2027
+
+**Risk**: The retriever might not find the gold path for hard questions, lowering accuracy below GCR's full-BFS baseline. Mitigation: ensemble retrieval (BM25 + dense + KG structure), retrieval with fallback to broader search.
+
 ---
 
 ## 6. References
