@@ -754,13 +754,13 @@ def run_experiment(args):
 
                 try:
                     to = args.sample_timeout if args.sample_timeout > 0 else 120
-                        with timeout(to):
-                            result, trie_ok = runner(
-                                model, input_builder, d, qid, method, oracle,
-                                index_len=args.index_len,
-                                max_new_tokens=args.max_new_tokens,
-                                reranker_model_path=args.reranker_model_path,
-                            )
+                    with timeout(to):
+                        result, trie_ok = runner(
+                            model, input_builder, d, qid, method, oracle,
+                            index_len=args.index_len,
+                            max_new_tokens=args.max_new_tokens,
+                            reranker_model_path=args.reranker_model_path,
+                        )
                 except TimeoutError:
                     logger.warning("  [%d/%d] %s timed out", idx + 1, n_samples, qid)
                     result = _make_result(qid, d["question"], "", d["answer"], method)
