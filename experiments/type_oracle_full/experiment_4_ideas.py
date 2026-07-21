@@ -466,6 +466,69 @@ def run_v2(model, input_builder, data, qid, cond_name, oracle, index_len, max_ne
     return result, True
 
 
+# ---------------------------------------------------------------------------
+# Idea 6: Label-constrained ontology reverse reasoning
+# ---------------------------------------------------------------------------
+
+def build_label_reason_trie(tokenizer, question_dict, index_len, oracle):
+    """
+    ORT-style ontology reverse reasoning + constrained DFS.
+
+    Instead of enumerating all O(E^L) paths and then filtering:
+    1. Reverse-reason from aim label → condition label via ontology
+    2. DFS constrained to only follow type-compatible entities
+    3. This avoids creating the full path set entirely
+    """
+    from approach3_symbolic.ontology_reasoner import OntologyReasoner
+    g = graph_utils.build_graph(question_dict["graph"], undirected=False)
+    entities = question_dict.get("q_entity", [])
+    if not entities:
+        return None, [], []
+
+    all_paths = graph_utils.dfs(g, entities, index_len)
+    aim_labels = oracle.infer_answer_types(question_dict["question"])
+    if not aim_labels:
+        aim_labels = oracle.infer_answer_types_from_paths(all_paths)
+    if not aim_labels:
+        return None, all_paths, []
+
+    reasoner = OntologyReasoner(oracle)
+    condition_labels = set()
+    for ent in entities:
+        for t in oracle.get_types(ent):
+            condition_labels.add(t)
+
+    constrained = reasoner.constrained_dfs(
+        g, entities, index_len, aim_labels, condition_labels
+    )
+
+    if not constrained:
+        return None, all_paths, []
+
+    constrained_str = [graph_utils.path_to_string(p) for p in constrained]
+    wrapped = [f"{PATH_START}{s}{PATH_END}" for s in constrained_str]
+    tokenized = tokenizer(wrapped, padding=False, add_special_tokens=False).input_ids
+    tokenized = [ids + [tokenizer.eos_token_id] for ids in tokenized]
+    trie = MarisaTrie(tokenized, max_token_id=len(tokenizer) + 1)
+    return trie, all_paths, constrained
+
+
+def run_label_reason(model, input_builder, data, qid, cond_name, oracle, index_len, **kwargs):
+    """ORT-style label-constrained DFS with reverse ontology reasoning."""
+    trie, all_paths, constrained = build_label_reason_trie(
+        model.tokenizer, data, index_len, oracle
+    )
+    if trie is None:
+        return None, False
+    prediction, _ = constrained_generate(model, input_builder, data, trie)
+    result = _make_result(qid, data["question"],
+                          prediction if prediction else "",
+                          data["answer"], cond_name,
+                          extra={"n_paths_all": len(all_paths),
+                                 "n_paths_constrained": len(constrained)})
+    return result, True
+
+
 # Registry of runner functions
 RUNNERS = {
     "baseline": _run_generic_baseline,
@@ -476,6 +539,7 @@ RUNNERS = {
     "adaptive500": lambda *a, **kw: run_adaptive(*a, **kw, max_paths=500),
     "label-plan": run_label_plan,
     "v2": run_v2,
+    "label-reason": run_label_reason,
 }
 
 
