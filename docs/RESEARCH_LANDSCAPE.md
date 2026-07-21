@@ -118,7 +118,95 @@ The natural next direction is **learned path pruning** — replacing schema-leve
 
 ---
 
-## 5. References
+---
+
+## 5. What to Do Next: Future Research Directions
+
+Based on everything we learned, here are the three most promising directions ranked:
+
+### 5.1 [Paper] "Why Step-Wise Decoding Fails on Knowledge Graphs"
+
+**Target**: EMNLP/ACL Findings short paper (4 pages)
+
+**Core contribution**: A clean, well-controlled negative result showing that per-hop trie construction introduces a tokenization disalignment problem.
+
+**Experimental design**:
+- 2 datasets (WebQSP, CWQ)
+- 2 model sizes (Llama 3.1-8B, Qwen 2.5-3B)
+- 3 methods: baseline (full trie), filtered (TypeOracle), v2 (step-wise)
+- Ablate with: k=5 vs k=10 beam, index_len=2 vs 4
+- Measure: accuracy, path count, tokenization overlap rate
+
+**Key evidence we already have**:
+- WebQSP: baseline 89% → v2 54.9% (-36.7pp)
+- CWQ 500q: baseline 53.2% → v2 32.2% (-21pp)
+- The tokenizer splits entity names differently in individual trie states vs. in-context
+- Pass to add: quantitative tokenization mismatch metric (%)
+
+**Why it's publishable**: The field is saturated with positive results. A well-motivated, well-controlled negative result with a clear root cause analysis is exactly what conferences are asking for (see the reproducibility crisis discussions). The tokenization disalignment problem is a known issue in constrained decoding (REL-RAG identifies it) but no paper has systematically ablated it as the cause of v2/step-wise failure.
+
+### 5.2 [Thesis/Paper] "Learning to Prune: Learned Path Relevance for Dynamic KG-Constrained Decoding"
+
+**Core idea**: Replace schema-level heuristics (TypeOracle) with a learned scorer that predicts path relevance given the question. Keep the hallucination guarantee by only pruning, never expanding beyond the KG.
+
+**Architecture**:
+```
+Question → Lightweight Scorer (BERT 200M) → Score all KG paths
+                                              ↓
+                                    Keep top-K scored paths
+                                              ↓
+                                    Build trie from top-K → Constrained Decode
+```
+
+**Why it addresses the bottleneck we found**:
+- TypeOracle is static: it applies the same rules regardless of the question
+- The LLM itself knows which paths are relevant but we never consult it before building the trie
+- A learned scorer can capture question-specific relevance (e.g., "Which film..." → paths to Film entities get higher scores)
+
+**Experimental design**:
+- Scorer: DistilBERT or MiniLM (~200M params, runs easily on CPU/GPU)
+- Training data: mined from existing runs (path → correct/incorrect label based on whether it led to a correct answer)
+- Comparison: baseline (full trie, 89%), filtered (static prune, 88%), learned-prune (target 88-90% with 50% fewer paths)
+
+**Feasibility**: This is a 1-GPU project. Training data is abundant (500q × avg 2000 paths = 1M training pairs). The scorer is small enough to run at trie-construction time.
+
+**Why this wasn't the original thesis**: We didn't know that the schema-level heuristics were the bottleneck. Now we do.
+
+### 5.3 [Long-term] "KGQA as Fact-Checking: Constrained Verification, Not Path-Finding"
+
+**Core idea**: Reframe constrained decoding as a verification problem rather than a generation surface problem. The trie/constraint becomes a **checker** that says "did the model's output contradict the KG?" rather than a **fence** that forces the model to only walk KG paths.
+
+**Why this is different**:
+- Current paradigm: constrain the *input* (the model can only generate KG-valid tokens)
+- Alternative: let the model generate freely, then check the *output* against the KG
+- This is more flexible (works with any model, including API-only models like GPT-4)
+
+**Architecture**:
+```
+LLM generates answer freely
+          ↓
+Extract (entity, relation, entity) triples from output
+          ↓
+Check each triple against KG (fact-checking)
+          ↓
+If contradiction found → reject output, trigger retry or correction
+          ↓
+Return fact-checked answer
+```
+
+**Why it leverages our findings**:
+- Our `validate` method (post-hoc TypeOracle check) is a primitive version of this: it caught 23.8% of errors with 95.5% precision
+- The negative v2 result shows that on-the-fly constraint is too expensive and error-prone
+- Post-hoc checking is cheaper, more flexible, and works with any model
+
+**Research questions**:
+1. How does post-hoc verification compare to constrained decoding on accuracy?
+2. What's the optimal retry strategy when verification fails?
+3. Can KG verification be generalized with a learned fact-checking model?
+
+---
+
+## 6. References
 
 1. Luo et al. (2025) "Graph-constrained Reasoning: Faithful Reasoning on Knowledge Graphs with Large Language Models." ICML 2025.
 2. Li et al. (2025) "Decoding on Graphs: Faithful and Sound Reasoning on Knowledge Graphs through Generation of Well-Formed Chains." ACL 2025.
