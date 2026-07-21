@@ -499,7 +499,7 @@ def build_label_reason_trie(tokenizer, question_dict, index_len, oracle):
         for t in oracle.get_types(ent):
             condition_labels.add(t)
 
-    constrained = reasoner.constrained_dfs(
+    constrained, label_paths = reasoner.constrained_dfs(
         g, entities, index_len, aim_labels, condition_labels
     )
 
