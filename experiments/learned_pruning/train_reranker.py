@@ -77,7 +77,8 @@ def main():
     args = parser.parse_args()
 
     from datasets import load_dataset
-    from sentence_transformers import SentenceTransformer, InputExample, losses
+    from sentence_transformers import SentenceTransformer, InputExample
+    from sentence_transformers.sentence_transformer import losses
 
     ts = time.strftime("%Y%m%d_%H%M%S")
     output_dir = Path(args.output_dir or f"results/reranker_trained_{ts}")
@@ -141,7 +142,8 @@ def main():
 
     logger.info("Training for %d epochs, batch_size=%d, lr=%f",
                 args.epochs, args.batch_size, args.lr)
-    train_dataloader = model._get_dataloader(
+    from torch.utils.data import DataLoader
+    train_dataloader = DataLoader(
         train_examples, shuffle=True, batch_size=args.batch_size
     )
     train_loss = losses.CosineSimilarityLoss(model)
