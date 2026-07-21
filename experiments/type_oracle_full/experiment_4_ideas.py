@@ -593,7 +593,7 @@ def run_experiment(args):
         attn_implementation="sdpa",
         max_new_tokens=args.max_new_tokens,
         maximun_token=4096,
-        dtype="bf16" if has_gpu else "fp32",
+        dtype=("bf16" if torch.cuda.is_bf16_supported() else "fp16") if has_gpu else "fp32",
         quant="none",
         chat_model=True, use_assistant_model=False,
     )
