@@ -46,8 +46,9 @@ def path_answers_question(path_str: str, answers: Set[str]) -> bool:
                for a in answers)
 
 
-def generate_paths(question_dict, index_len: int) -> Tuple[List[str], str]:
-    """Generate all DFS paths for a question. Returns (path_strings, question_text)."""
+def generate_paths(question_dict, index_len: int,
+                   max_paths: int = 0) -> Tuple[List[str], str]:
+    """Generate DFS paths. If max_paths > 0, randomly sample that many."""
     g = graph_utils.build_graph(question_dict["graph"], undirected=False)
     entities = question_dict.get("q_entity", [])
     q_text = question_dict.get("question", "")
@@ -56,6 +57,9 @@ def generate_paths(question_dict, index_len: int) -> Tuple[List[str], str]:
         return [], q_text
 
     all_paths = graph_utils.dfs(g, entities, index_len)
+    if max_paths > 0 and len(all_paths) > max_paths:
+        import random
+        all_paths = random.sample(all_paths, max_paths)
     path_strs = [graph_utils.path_to_string(p) for p in all_paths]
     return path_strs, q_text
 
@@ -98,6 +102,8 @@ def main():
     parser.add_argument("--dataset", default="RoG-cwq")
     parser.add_argument("--split", default="test")
     parser.add_argument("--index-len", type=int, default=4)
+    parser.add_argument("--max-paths", type=int, default=5000,
+                        help="Cap paths per question (0=unlimited)")
     parser.add_argument("--k", type=int, nargs="+", default=[1, 5, 10, 50, 100, 500])
     parser.add_argument("--model", default="sentence-transformers/all-MiniLM-L6-v2")
     parser.add_argument("--output-dir", type=str, default=None)
@@ -141,7 +147,7 @@ def main():
         if not gt:
             continue
 
-        paths, q_text = generate_paths(d, args.index_len)
+        paths, q_text = generate_paths(d, args.index_len, args.max_paths)
         if not paths:
             logger.debug("  [%d/%d] %s: no paths", idx + 1, n, qid)
             continue
