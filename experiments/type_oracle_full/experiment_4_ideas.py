@@ -530,6 +530,66 @@ def run_label_reason(model, input_builder, data, qid, cond_name, oracle, index_l
     return result, True
 
 
+# ---------------------------------------------------------------------------
+# Idea 7: Learned pruning — reranker path scoring + top-K trie
+# ---------------------------------------------------------------------------
+
+_RERANKER_CACHE = {}
+
+def get_reranker(model_path):
+    if model_path not in _RERANKER_CACHE:
+        from experiments.learned_pruning.reranker import PathReranker
+        _RERANKER_CACHE[model_path] = PathReranker(model_path)
+    return _RERANKER_CACHE[model_path]
+
+
+def build_reranker_prune_trie(tokenizer, question_dict, index_len, reranker, top_k):
+    """Score all paths with reranker, keep only top-K."""
+    g = graph_utils.build_graph(question_dict["graph"], undirected=False)
+    entities = question_dict.get("q_entity", [])
+    if not entities:
+        return None, [], []
+
+    all_paths = graph_utils.dfs(g, entities, index_len)
+    if not all_paths:
+        return None, all_paths, []
+
+    path_strs = [path_to_str(p) for p in all_paths]
+    q_text = question_dict.get("question", "")
+    ranked = reranker.rank(q_text, path_strs)  # [(idx, path_str, score), ...]
+    top_indices = {idx for idx, _, _ in ranked[:min(top_k, len(ranked))]}
+
+    pruned_paths = [all_paths[i] for i in top_indices]
+    pruned_str = [path_strs[i] for i in top_indices]
+    wrapped = [f"{PATH_START}{s}{PATH_END}" for s in pruned_str]
+    tokenized = tokenizer(wrapped, padding=False, add_special_tokens=False).input_ids
+    tokenized = [ids + [tokenizer.eos_token_id] for ids in tokenized]
+    trie = MarisaTrie(tokenized, max_token_id=len(tokenizer) + 1)
+    return trie, all_paths, pruned_paths
+
+
+def run_reranker_prune(model, input_builder, data, qid, cond_name, oracle, index_len, **kwargs):
+    top_k = kwargs.get("top_k", 50)
+    reranker_model = kwargs.get("reranker_model_path", None)
+    if reranker_model is None:
+        logger.error("reranker_model_path required for reranker method")
+        return None, False
+    reranker = get_reranker(reranker_model)
+    trie, all_paths, pruned = build_reranker_prune_trie(
+        model.tokenizer, data, index_len, reranker, top_k
+    )
+    if trie is None:
+        return None, False
+    prediction, _ = constrained_generate(model, input_builder, data, trie)
+    result = _make_result(qid, data["question"],
+                          prediction if prediction else "",
+                          data["answer"], cond_name,
+                          extra={"n_paths_all": len(all_paths),
+                                 "n_paths_pruned": len(pruned),
+                                 "reranker_top_k": top_k})
+    return result, True
+
+
 # Registry of runner functions
 RUNNERS = {
     "baseline": _run_generic_baseline,
@@ -541,6 +601,10 @@ RUNNERS = {
     "label-plan": run_label_plan,
     "v2": run_v2,
     "label-reason": run_label_reason,
+    "rerank10": lambda *a, **kw: run_reranker_prune(*a, **kw, top_k=10),
+    "rerank50": lambda *a, **kw: run_reranker_prune(*a, **kw, top_k=50),
+    "rerank100": lambda *a, **kw: run_reranker_prune(*a, **kw, top_k=100),
+    "rerank500": lambda *a, **kw: run_reranker_prune(*a, **kw, top_k=500),
 }
 
 
@@ -690,12 +754,13 @@ def run_experiment(args):
 
                 try:
                     to = args.sample_timeout if args.sample_timeout > 0 else 120
-                    with timeout(to):
-                        result, trie_ok = runner(
-                            model, input_builder, d, qid, method, oracle,
-                            index_len=args.index_len,
-                            max_new_tokens=args.max_new_tokens,
-                        )
+                        with timeout(to):
+                            result, trie_ok = runner(
+                                model, input_builder, d, qid, method, oracle,
+                                index_len=args.index_len,
+                                max_new_tokens=args.max_new_tokens,
+                                reranker_model_path=args.reranker_model_path,
+                            )
                 except TimeoutError:
                     logger.warning("  [%d/%d] %s timed out", idx + 1, n_samples, qid)
                     result = _make_result(qid, d["question"], "", d["answer"], method)
@@ -877,5 +942,7 @@ if __name__ == "__main__":
                         help="Comma-separated: baseline,filtered,validate,adaptive30,adaptive100,adaptive500,label-plan,v2")
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--sample-timeout", type=int, default=120)
+    parser.add_argument("--reranker-model-path", type=str, default=None,
+                        help="Path to fine-tuned reranker model for learned pruning methods")
     args = parser.parse_args()
     run_experiment(args)
