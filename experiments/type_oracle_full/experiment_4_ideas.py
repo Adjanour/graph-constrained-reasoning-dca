@@ -593,7 +593,7 @@ def run_experiment(args):
         attn_implementation="sdpa",
         max_new_tokens=args.max_new_tokens,
         maximun_token=4096,
-        dtype=("bf16" if torch.cuda.is_bf16_supported() else "fp16") if has_gpu else "fp32",
+        dtype="fp16" if has_gpu else "fp32",
         quant="none",
         chat_model=True, use_assistant_model=False,
     )
@@ -848,7 +848,7 @@ if __name__ == "__main__":
     parser.add_argument("--split", default="test")
     parser.add_argument("--index-len", type=int, default=2)
     parser.add_argument("-k", type=int, default=10)
-    parser.add_argument("--gen-mode", default="group-beam")
+    parser.add_argument("--gen-mode", default="beam")
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--max-samples", type=int, default=100)
     parser.add_argument("--methods", default="baseline,filtered,adaptive100,label-plan",
