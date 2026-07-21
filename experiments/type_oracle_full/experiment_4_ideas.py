@@ -665,6 +665,14 @@ def run_experiment(args):
         n_timeouts = 0
         total_paths_all = 0
         total_paths_filtered = 0
+        total_peak_mem_mb = 0.0
+        has_gpu_mem = False
+        try:
+            import torch
+            if torch.cuda.is_available():
+                has_gpu_mem = True
+        except ImportError:
+            pass
         t_start = time.time()
 
         with open(pred_path, "a") as fout:
@@ -672,6 +680,11 @@ def run_experiment(args):
                 qid = d["id"]
                 if qid in processed_ids:
                     continue
+
+                if has_gpu_mem:
+                    torch.cuda.reset_peak_memory_stats()
+                    torch.cuda.synchronize()
+                    mem_before = torch.cuda.memory_allocated()
 
                 oracle = TypeOracle.from_graph(d["graph"])
 
@@ -694,6 +707,13 @@ def run_experiment(args):
                     result = _make_result(qid, d["question"], "", d["answer"], method)
                     trie_ok = True
 
+                if has_gpu_mem and result is not None:
+                    torch.cuda.synchronize()
+                    peak_mem = torch.cuda.max_memory_allocated()
+                    peak_mb = (peak_mem - mem_before) / 1_000_000 if peak_mem > mem_before else 0
+                    result["peak_memory_mb"] = round(peak_mb, 1)
+                    total_peak_mem_mb += peak_mb
+
                 if result is None:
                     n_skipped += 1
                     processed_ids.add(qid)
@@ -711,9 +731,9 @@ def run_experiment(args):
 
                 if (idx + 1) % 10 == 0:
                     elapsed = time.time() - t_start
-                    logger.info("  [%s] %d/%d done | %.1fs | %d skip %d dead %d timeout",
+                    logger.info("  [%s] %d/%d done | %.1fs | %d skip %d dead %d timeout | peak mem: %.0f MB",
                                 method, len(processed_ids), n_samples, elapsed,
-                                n_skipped, n_dead_ends, n_timeouts)
+                                n_skipped, n_dead_ends, n_timeouts, total_peak_mem_mb / max(1, len(processed_ids)))
 
         elapsed = time.time() - t_start
         preds = []
@@ -728,6 +748,7 @@ def run_experiment(args):
         hits = compute_hits(preds)
         n = len(preds)
 
+        avg_peak_mem = round(total_peak_mem_mb / max(1, n), 1) if total_peak_mem_mb > 0 else 0
         metrics = {
             "condition": method,
             "n": n,
@@ -735,6 +756,7 @@ def run_experiment(args):
             "hit_at_1": round(hits / max(1, n) * 100, 1),
             "time_s": round(elapsed, 1),
             "avg_time_per_q": round(elapsed / max(1, n), 2),
+            "avg_peak_memory_mb": avg_peak_mem,
             "n_skipped": n_skipped,
             "n_dead_ends": n_dead_ends,
             "n_timeouts": n_timeouts,
