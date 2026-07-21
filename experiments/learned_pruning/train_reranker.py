@@ -35,14 +35,14 @@ from utils import logger
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 
-def generate_paths(question_dict, index_len: int) -> Tuple[List[str], str, set]:
+def generate_paths(question_dict, index_len: int, max_paths: int = 0) -> Tuple[List[str], str, set]:
     g = graph_utils.build_graph(question_dict["graph"], undirected=False)
     entities = question_dict.get("q_entity", [])
     q_text = question_dict.get("question", "")
     gt = set(question_dict.get("answer", []))
     if not entities:
         return [], q_text, gt
-    all_paths = graph_utils.dfs(g, entities, index_len)
+    all_paths = graph_utils.dfs(g, entities, index_len, max_paths=max_paths if max_paths > 0 else 50000)
     path_strs = [graph_utils.path_to_string(p) for p in all_paths]
     return path_strs, q_text, gt
 
@@ -73,6 +73,8 @@ def main():
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--max-neg-per-q", type=int, default=20,
                         help="Max negative samples per question")
+    parser.add_argument("--max-paths", type=int, default=0,
+                        help="Max paths per question (0 = unlimited / 50000)")
     parser.add_argument("--output-dir", type=str, default=None)
     args = parser.parse_args()
 
@@ -95,7 +97,7 @@ def main():
     stats = {"total": 0, "with_gold": 0, "total_pos": 0, "total_neg": 0}
 
     for idx, d in enumerate(dataset):
-        paths, q_text, gt = generate_paths(d, args.index_len)
+        paths, q_text, gt = generate_paths(d, args.index_len, max_paths=args.max_paths)
         if not paths or not gt:
             continue
 
