@@ -94,6 +94,7 @@ def constrained_generate(model, input_builder, data, trie):
             prefix_allowed_tokens_fn=gcr.allowed_tokens_fn,
             return_dict_in_generate=True,
             pad_token_id=model.tokenizer.eos_token_id,
+            trust_remote_code=True,
         )
     except Exception as e:
         logger.error("Constrained generation failed: %s", e)
