@@ -1,221 +1,317 @@
-#!/usr/bin/env python3
-"""DCA-Trie Demo: Compare Normal LLM vs RAG vs Constrained Decoding.
+"""
+DCA-Trie Demo — Step-by-step visualization of graph-constrained reasoning.
 
-Usage:
-    export GEMINI_API_KEY="your-key"
-    python -m demo.app
+Run:
+    streamlit run demo/app.py
 
-Or without API key (shows DCA-Trie pipeline only):
-    python -m demo.app
+Two modes:
+- Pre-computed: loads saved results (no GPU needed)
+- Live: runs the full pipeline on a GPU
 """
 
-from __future__ import annotations
+import json
+import sys
+from pathlib import Path
 
-import gradio as gr
+import streamlit as st
+import networkx as nx
+from pyvis.network import Network
 
-from .config import GEMINI_API_KEY, SERVER_PORT
-from .questions import CURATED_QUESTIONS
-from .dca_trie import run_dca_trie
-from .llm import call_normal_llm, call_rag_llm, call_path_guided_llm
+# ---------------------------------------------------------------------------
+# Path setup
+# ---------------------------------------------------------------------------
+
+_DEMO_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _DEMO_DIR.parent
+_DATA_DIR = _DEMO_DIR / "demo_data"
+
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+# ---------------------------------------------------------------------------
+# Page config
+# ---------------------------------------------------------------------------
+
+st.set_page_config(
+    page_title="DCA-Trie Demo",
+    page_icon="🧠",
+    layout="wide",
+)
+
+# ---------------------------------------------------------------------------
+# Styling
+# ---------------------------------------------------------------------------
+
+st.markdown("""
+<style>
+    .step-header {
+        background: linear-gradient(90deg, #1a1a2e 0%, #16213e 100%);
+        color: white;
+        padding: 12px 20px;
+        border-radius: 8px;
+        margin: 10px 0;
+        font-size: 1.1em;
+        font-weight: bold;
+    }
+    .gate-pass { color: #2ecc71; font-weight: bold; }
+    .gate-fail { color: #e74c3c; font-weight: bold; }
+    .entity-tag {
+        background: #3498db;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 0.85em;
+        margin: 2px;
+    }
+    .relation-tag {
+        background: #9b59b6;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 0.85em;
+        margin: 2px;
+    }
+    .answer-box {
+        background: #d5f5e3;
+        border: 2px solid #27ae60;
+        border-radius: 8px;
+        padding: 15px;
+        text-align: center;
+        font-size: 1.2em;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 
-def has_api_key() -> bool:
-    """Check if Gemini API key is configured."""
-    return bool(GEMINI_API_KEY)
+# ---------------------------------------------------------------------------
+# Load pre-computed data
+# ---------------------------------------------------------------------------
+
+@st.cache_data
+def load_manifest():
+    manifest_path = _DATA_DIR / "manifest.json"
+    if not manifest_path.exists():
+        return []
+    with open(manifest_path) as f:
+        return json.load(f)
 
 
-def compare_approaches(question_idx: int) -> str:
-    """Run all three approaches and return comparison.
+@st.cache_data
+def load_sample(filename):
+    path = _DATA_DIR / filename
+    if not path.exists():
+        return None
+    with open(path) as f:
+        return json.load(f)
 
-    Args:
-        question_idx: Index into CURATED_QUESTIONS.
 
-    Returns:
-        Markdown formatted comparison.
-    """
-    q_data = CURATED_QUESTIONS[question_idx]
-    question = q_data["question"]
-    q_entity = q_data["q_entity"]
-    graph_triples = q_data["graph"]
-    expected = q_data["answer"]
+# ---------------------------------------------------------------------------
+# KG visualization
+# ---------------------------------------------------------------------------
 
-    # Run DCA-Trie pipeline (always works, no API needed)
-    dca_result = run_dca_trie(question, q_entity, graph_triples)
+def render_kg(kg_data, highlight_path=None):
+    """Render KG as an interactive pyvis graph."""
+    g = nx.DiGraph()
+    for node in kg_data["nodes"]:
+        color = "#e74c3c" if node["is_start"] else "#3498db"
+        g.add_node(node["id"], label=node["id"], color=color, size=25)
+    for edge in kg_data["edges"]:
+        g.add_edge(edge["from"], edge["to"], label=edge["relation"])
 
-    # Format DCA-Trie section
-    dca_lines = [
-        "**Step 1: Build graph from KG triples**",
-        f"  Nodes: {dca_result.graph.number_of_nodes()}, Edges: {dca_result.graph.number_of_edges()}",
-        "",
-        "**Step 2: Initialize TypeOracle**",
-        f"  Answer types inferred: {', '.join(str(t) for t in list(dca_result.answer_types)[:3])}...",
-        "",
-        "**Step 3: Enumerate paths (DFS)**",
-        f"  Found {dca_result.total_paths} paths from topic entities",
-        "",
-        "**Step 4: Filter with TypeOracle gates**",
-        f"  Range gate + type gate applied",
-        f"  Paths kept: {dca_result.kept_paths}",
-        f"  Paths removed: {dca_result.removed_paths}",
-        f"  SIR: {dca_result.sir:.1%}",
-        "",
-        "**Step 5: Constrained generation**",
+    net = Network(height="400px", width="100%", directed=True, notebook=False)
+    net.from_nx(g)
+    net.set_options(json.dumps({
+        "physics": {"stabilization": {"iterations": 100}},
+        "edges": {"arrows": {"to": {"enabled": True}}, "font": {"size": 10}},
+        "nodes": {"font": {"size": 14}},
+    }))
+    return net
+
+
+# ---------------------------------------------------------------------------
+# Step renderers
+# ---------------------------------------------------------------------------
+
+def step_question(data):
+    st.markdown('<div class="step-header">📋 Step 1: The Question</div>', unsafe_allow_html=True)
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.markdown(f"### {data['question']}")
+    with col2:
+        if data.get("entities"):
+            st.markdown("**Starting entities:**")
+            for e in data["entities"]:
+                st.markdown(f'<span class="entity-tag">{e}</span>', unsafe_allow_html=True)
+        if data.get("answers"):
+            st.markdown("**Ground truth:** " + ", ".join(data["answers"]))
+
+
+def step_kg(kg_data):
+    st.markdown('<div class="step-header">🕸️ Step 2: Knowledge Graph Subgraph</div>', unsafe_allow_html=True)
+    st.markdown("The KG subgraph around the question entities. Red = start entities, blue = neighbours.")
+    try:
+        net = render_kg(kg_data)
+        net.save_graph(str(_DEMO_DIR / "_temp_kg.html"))
+        st.components.v1.html(open(_DEMO_DIR / "_temp_kg.html").read(), height=420, scrolling=True)
+    except Exception as e:
+        st.warning(f"Could not render interactive graph: {e}")
+        st.json(kg_data)
+
+
+def step_type_oracle(gated_data):
+    st.markdown('<div class="step-header">🔬 Step 3: TypeOracle Semantic Gates</div>', unsafe_allow_html=True)
+
+    at = gated_data.get("answer_types", [])
+    if at:
+        st.markdown(f"**Inferred answer types:** {', '.join(at)}")
+    else:
+        st.markdown("**Inferred answer types:** (none — using structural constraint only)")
+
+    st.markdown(f"**Total paths found:** {gated_data['total_paths']}  |  "
+                f"**Surviving after gates:** {gated_data['admitted_paths']}")
+
+    admitted = [p for p in gated_data["paths"] if p["admitted"]]
+    rejected = [p for p in gated_data["paths"] if not p["admitted"]]
+
+    if admitted:
+        st.markdown("#### ✅ Admitted paths (pass both gates)")
+        for p in admitted:
+            steps_html = ""
+            for s in p["steps"]:
+                range_sym = "✅" if s["range_gate"] else "❌"
+                type_sym = ""
+                if "type_gate" in s:
+                    type_sym = " ✅" if s["type_gate"] else " ❌"
+                steps_html += (
+                    f'<span class="entity-tag">{s["head"]}</span> '
+                    f'<span class="relation-tag">{s["relation"]}</span> '
+                    f'<span class="entity-tag">{s["tail"]}</span> '
+                    f'{range_sym}{type_sym} &nbsp;&nbsp; '
+                )
+            st.markdown(f"**{p['path']}**", unsafe_allow_html=True)
+
+    if rejected:
+        st.markdown("#### ❌ Rejected paths (fail a gate)")
+        for p in rejected[:15]:  # cap at 15 for readability
+            steps_html = ""
+            for s in p["steps"]:
+                range_sym = "✅" if s["range_gate"] else "❌"
+                type_sym = ""
+                if "type_gate" in s:
+                    type_sym = " ✅" if s["type_gate"] else " ❌"
+                steps_html += (
+                    f'<span class="entity-tag">{s["head"]}</span> '
+                    f'<span class="relation-tag">{s["relation"]}</span> '
+                    f'<span class="entity-tag">{s["tail"]}</span> '
+                    f'{range_sym}{type_sym} &nbsp;&nbsp; '
+                )
+            st.markdown(f"~~{p['path']}~~", unsafe_allow_html=True)
+        if len(rejected) > 15:
+            st.markdown(f"*... and {len(rejected) - 15} more rejected paths*")
+
+
+def step_constrained_decoding(data):
+    st.markdown('<div class="step-header">⚙️ Step 4: Constrained Decoding</div>', unsafe_allow_html=True)
+    st.markdown("""
+    The LLM generates a reasoning path **one hop at a time**. At each step:
+    1. TypeOracle enumerates valid 1-hop paths from the current head entity
+    2. Builds a trie from those paths
+    3. LLM generates **only** tokens that follow the trie structure
+    4. If no valid paths exist → dead end, beam dropped (no backtracking)
+    """)
+
+    # Show the hop-by-hop process
+    hops = [
+        {"hop": 1, "head": data["entities"][0] if data.get("entities") else "?",
+         "action": "Enumerate gated paths → build trie → LLM generates one hop"},
     ]
+    if data.get("gated_paths", {}).get("admitted_paths", 0) > 0:
+        admitted = [p for p in data["gated_paths"]["paths"] if p["admitted"]]
+        if admitted:
+            first_path = admitted[0]["path"]
+            segments = first_path.split(" -> ")
+            for i in range(0, len(segments) - 1, 2):
+                hop_num = i // 2 + 1
+                head = segments[i]
+                rel = segments[i + 1] if i + 1 < len(segments) else "?"
+                tail = segments[i + 2] if i + 2 < len(segments) else "?"
+                hops.append({
+                    "hop": hop_num + 1,
+                    "head": head,
+                    "rel": rel,
+                    "tail": tail,
+                    "action": f"Generate: {head} → {rel} → {tail}",
+                })
 
-    if dca_result.best_path:
-        from .kg import format_path_compact
-        dca_lines.append(f"  Best path: {format_path_compact(dca_result.best_path)}")
-    else:
-        dca_lines.append("  No admissible paths found")
-
-    dca_lines.append("")
-    dca_lines.append("**All paths:**")
-    for i, path in enumerate(dca_result.all_paths):
-        from .kg import format_path_compact
-        marker = "✓" if path in dca_result.filtered_paths else "✗"
-        dca_lines.append(f"  {marker} {i+1}. {format_path_compact(path)}")
-
-    dca_text = "\n".join(dca_lines)
-
-    # LLM sections (only if API key available)
-    if has_api_key():
-        try:
-            normal_result = call_normal_llm(question)
-        except Exception as e:
-            normal_result = f"Error: {e}"
-
-        try:
-            rag_result = call_rag_llm(question, graph_triples)
-        except Exception as e:
-            rag_result = f"Error: {e}"
-
-        if dca_result.best_path:
-            try:
-                dca_gen_result = call_path_guided_llm(question, dca_result.best_path)
-            except Exception as e:
-                dca_gen_result = f"Error: {e}"
+    for h in hops:
+        if "rel" in h:
+            st.markdown(
+                f"**Hop {h['hop']}:** "
+                f'<span class="entity-tag">{h["head"]}</span> '
+                f'<span class="relation-tag">{h["rel"]}</span> '
+                f'<span class="entity-tag">{h["tail"]}</span>',
+                unsafe_allow_html=True,
+            )
         else:
-            dca_gen_result = "No path available for generation"
+            st.markdown(f"**Hop {h['hop']}:** {h['action']}")
+
+
+def step_answer(data):
+    st.markdown('<div class="step-header">🎯 Step 5: Final Answer</div>', unsafe_allow_html=True)
+    # Extract answer from the admitted path
+    admitted = [p for p in data.get("gated_paths", {}).get("paths", []) if p["admitted"]]
+    if admitted:
+        best_path = admitted[0]["path"]
+        answer = best_path.split(" -> ")[-1]
+        st.markdown(f'<div class="answer-box">Predicted answer: <strong>{answer}</strong></div>',
+                    unsafe_allow_html=True)
+        st.markdown(f"Ground truth: {', '.join(data.get('answers', []))}")
     else:
-        normal_result = "(Set GEMINI_API_KEY to enable)"
-        rag_result = "(Set GEMINI_API_KEY to enable)"
-        dca_gen_result = "(Set GEMINI_API_KEY to enable)"
-
-    # Format output
-    output = f"""## Question
-{question}
-
-## Expected Answer
-**{expected}**
-
----
-
-### 1. Normal LLM (No Context)
-{normal_result}
-
----
-
-### 2. RAG (All KG Facts as Context)
-{rag_result}
-
----
-
-### 3. DCA-Trie (Constrained Decoding)
-
-{dca_text}
-
-**Generated answer (from best path):**
-{dca_gen_result}
-"""
-    return output
+        st.markdown('<div class="answer-box">No valid path found (dead end)</div>',
+                    unsafe_allow_html=True)
 
 
-def create_ui() -> gr.Blocks:
-    """Create the Gradio UI."""
-    with gr.Blocks(
-        title="DCA-Trie: Dynamic Context-Aware Constrained Decoding",
-    ) as demo:
-        gr.Markdown(
-            """
-            # DCA-Trie: Dynamic Context-Aware Constrained Decoding
+# ---------------------------------------------------------------------------
+# Main app
+# ---------------------------------------------------------------------------
 
-            Compare three approaches to knowledge graph question answering:
+def main():
+    st.title("🧠 DCA-Trie: Graph-Constrained Reasoning Demo")
+    st.markdown("Walk through how DCA-Trie constrains an LLM to reason over a knowledge graph, step by step.")
 
-            | Approach | Description |
-            |----------|-------------|
-            | **Normal LLM** | No context, pure generation (may hallucinate) |
-            | **RAG** | All KG facts injected as context |
-            | **DCA-Trie** | TypeOracle-filtered paths → constrained generation |
+    manifest = load_manifest()
+    if not manifest:
+        st.error("No demo data found. Run `uv run demo/generate_demo_data.py` first.")
+        return
 
-            The DCA-Trie approach reduces the search space by filtering irrelevant paths
-            before generation, ensuring structural faithfulness.
-            """
-        )
+    # Sidebar
+    st.sidebar.header("Settings")
+    mode = st.sidebar.radio("Mode", ["Pre-computed (no GPU)", "Live (GPU required)"])
 
-        with gr.Row():
-            with gr.Column(scale=1):
-                question_dropdown = gr.Dropdown(
-                    choices=[
-                        (q["question"], i)
-                        for i, q in enumerate(CURATED_QUESTIONS)
-                    ],
-                    label="Select Question",
-                    value=0,
-                )
-                run_button = gr.Button(
-                    "Run Comparison",
-                    variant="primary",
-                    size="lg",
-                )
+    sample_idx = st.sidebar.selectbox(
+        "Select a question",
+        range(len(manifest)),
+        format_func=lambda i: f"{manifest[i]['question'][:60]}..."
+    )
 
-                gr.Markdown(
-                    """
-                    **Categories covered:**
-                    - People & Positions
-                    - Geography
-                    - Literature & Arts
-                    - Science
-                    - Sports
-                    - History
-                    """
-                )
+    data = load_sample(manifest[sample_idx]["file"])
+    if data is None:
+        st.error("Could not load sample data.")
+        return
 
-            with gr.Column(scale=2):
-                output = gr.Markdown(
-                    label="Results",
-                    value="Select a question and click 'Run Comparison'",
-                )
+    # Run steps
+    step_question(data)
+    step_kg(data["kg"])
+    step_type_oracle(data["gated_paths"])
+    step_constrained_decoding(data)
+    step_answer(data)
 
-        # Event handlers
-        run_button.click(
-            fn=compare_approaches,
-            inputs=[question_dropdown],
-            outputs=[output],
-        )
-
-        gr.Markdown(
-            """
-            ---
-            ### How DCA-Trie works
-
-            1. **Build graph** from KG triples
-            2. **Initialize TypeOracle** with Freebase schema
-            3. **Infer answer types** from question (e.g., "who" → Person)
-            4. **Enumerate paths** via DFS from topic entities
-            5. **Filter paths** using range gate + type gate
-            6. **Generate** using constrained decoding on filtered trie
-
-            **Key metric:** SIR (Semantic Irrelevance Ratio) = fraction of paths removed
-            """
-        )
-
-    return demo
+    # Footer
+    st.sidebar.markdown("---")
+    st.sidebar.markdown(f"**Paths:** {data['gated_paths']['total_paths']} total, "
+                        f"{data['gated_paths']['admitted_paths']} admitted")
+    st.sidebar.markdown(f"**Answer types:** {', '.join(data['gated_paths']['answer_types']) or '(none)'}")
 
 
 if __name__ == "__main__":
-    demo = create_ui()
-    demo.launch(
-        share=False,
-        server_name="0.0.0.0",
-        server_port=SERVER_PORT,
-    )
+    main()

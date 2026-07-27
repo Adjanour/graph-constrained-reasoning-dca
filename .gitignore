@@ -56,6 +56,7 @@ media/
 
 # Demo cache
 demo/__pycache__/
+demo/_temp_kg.html
 results_from_vast/
 
 # Result directories
