@@ -36,11 +36,13 @@ def build_kg_viz_data(graph_data, entities):
     }
 
 
-def enumerate_gated_paths(graph_data, entities, oracle, index_len):
+def enumerate_gated_paths(graph_data, entities, oracle, index_len, question):
     """Enumerate all paths and show which survive TypeOracle gates."""
     g = graph_utils.build_graph(graph_data, undirected=False)
     all_paths = graph_utils.dfs(g, entities, index_len)
-    answer_types = oracle.infer_answer_types_from_paths(all_paths) if all_paths else frozenset()
+    answer_types = oracle.infer_answer_types(question) if question else frozenset()
+    if not answer_types and all_paths:
+        answer_types = oracle.infer_answer_types_from_paths(all_paths)
 
     results = []
     for p in all_paths:
@@ -111,7 +113,7 @@ def main():
 
         oracle = TypeOracle.from_graph(data["graph"])
         kg_viz = build_kg_viz_data(data["graph"], entities)
-        gated = enumerate_gated_paths(data["graph"], entities, oracle, args.index_len)
+        gated = enumerate_gated_paths(data["graph"], entities, oracle, args.index_len, question)
 
         record = {
             "id": qid,
