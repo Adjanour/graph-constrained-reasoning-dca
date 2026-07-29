@@ -36,6 +36,37 @@ def build_kg_viz_data(graph_data, entities):
     }
 
 
+def load_predictions(path):
+    """Load a predictions_*.jsonl file (real saved model output) keyed by question id."""
+    preds = {}
+    if not path.exists():
+        return preds
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            preds[rec["id"]] = rec
+    return preds
+
+
+def parse_prediction(rec, answers):
+    """Split a raw '# Reasoning Path:\\n...\\n# Answer:\\n...' record into parts."""
+    if rec is None:
+        return None
+    text = rec.get("prediction", "")
+    path_part, _, answer_part = text.partition("# Answer:")
+    reasoning_path = path_part.replace("# Reasoning Path:", "").strip()
+    answer = answer_part.strip()
+    gt = {a.lower() for a in answers}
+    return {
+        "reasoning_path": reasoning_path,
+        "answer": answer,
+        "correct": answer.lower() in gt,
+    }
+
+
 def enumerate_gated_paths(graph_data, entities, oracle, index_len, question):
     """Enumerate all paths and show which survive TypeOracle gates."""
     g = graph_utils.build_graph(graph_data, undirected=False)
@@ -90,12 +121,23 @@ def main():
     parser.add_argument("--split", default="test")
     parser.add_argument("--index-len", type=int, default=2)
     parser.add_argument("--output-dir", type=str, default="demo/demo_data")
+    parser.add_argument(
+        "--predictions-dir",
+        type=str,
+        default="results/ideas_webqsp_full",
+        help="Directory with real predictions_baseline.jsonl / predictions_filtered.jsonl from an actual experiment run",
+    )
     args = parser.parse_args()
 
     from datasets import load_dataset
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    preds_dir = _PROJECT_ROOT / args.predictions_dir
+    gcr_preds = load_predictions(preds_dir / "predictions_baseline.jsonl")
+    dca_preds = load_predictions(preds_dir / "predictions_filtered.jsonl")
+    print(f"Loaded {len(gcr_preds)} GCR baseline / {len(dca_preds)} DCA-Trie v1 real predictions from {preds_dir}")
 
     print(f"Loading {args.dataset} ({args.split})...")
     ds = load_dataset(args.dataset, split=args.split)
@@ -122,6 +164,8 @@ def main():
             "answers": answers,
             "kg": kg_viz,
             "gated_paths": gated,
+            "gcr_prediction": parse_prediction(gcr_preds.get(qid), answers),
+            "dca_trie_prediction": parse_prediction(dca_preds.get(qid), answers),
         }
         manifest.append(record)
 

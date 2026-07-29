@@ -34,7 +34,6 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 st.set_page_config(
     page_title="DCA-Trie Demo",
-    page_icon="🧠",
     layout="wide",
 )
 
@@ -109,23 +108,56 @@ def load_sample(filename):
 # KG visualization
 # ---------------------------------------------------------------------------
 
-def render_kg(kg_data, highlight_path=None):
-    """Render KG as an interactive pyvis graph."""
-    g = nx.DiGraph()
-    for node in kg_data["nodes"]:
-        color = "#e74c3c" if node["is_start"] else "#3498db"
-        g.add_node(node["id"], label=node["id"], color=color, size=25)
-    for edge in kg_data["edges"]:
-        g.add_edge(edge["from"], edge["to"], label=edge["relation"])
+def render_kg(kg_data, gated_paths=None, max_edges=40):
+    """Render a readable 1-hop neighbourhood of the KG as an interactive graph.
 
-    net = Network(height="400px", width="100%", directed=True, notebook=False)
+    The full retrieved WebQSP subgraph can have thousands of edges, which is
+    unreadable and slow to lay out with force-directed physics. We show only
+    the direct (1-hop) neighbourhood of the start entities, capped at
+    ``max_edges``, prioritising edges that lead to an entity reached by an
+    admitted reasoning path so the highlighted structure matches the story
+    told in the TypeOracle step.
+    """
+    start_ids = {n["id"] for n in kg_data["nodes"] if n["is_start"]}
+
+    admitted_next_hop = set()
+    if gated_paths:
+        for p in gated_paths.get("paths", []):
+            if p["admitted"] and p["steps"]:
+                admitted_next_hop.add(p["steps"][0]["tail"])
+
+    local_edges = [e for e in kg_data["edges"] if e["from"] in start_ids or e["to"] in start_ids]
+    local_edges.sort(key=lambda e: 0 if (e["to"] if e["from"] in start_ids else e["from"]) in admitted_next_hop else 1)
+    shown_edges = local_edges[:max_edges]
+
+    g = nx.DiGraph()
+    for sid in start_ids:
+        g.add_node(sid, label=sid, color="#e74c3c", size=30)
+    for e in shown_edges:
+        for nid in (e["from"], e["to"]):
+            if nid not in g:
+                color = "#2ecc71" if nid in admitted_next_hop else "#3498db"
+                g.add_node(nid, label=nid, color=color, size=18)
+        g.add_edge(e["from"], e["to"], label=e["relation"])
+
+    net = Network(height="420px", width="100%", directed=True, notebook=False)
     net.from_nx(g)
     net.set_options(json.dumps({
-        "physics": {"stabilization": {"iterations": 100}},
-        "edges": {"arrows": {"to": {"enabled": True}}, "font": {"size": 10}},
-        "nodes": {"font": {"size": 14}},
+        "physics": {
+            "solver": "forceAtlas2Based",
+            "stabilization": {"iterations": 60},
+            "forceAtlas2Based": {"springLength": 120, "avoidOverlap": 0.5},
+        },
+        "edges": {
+            "arrows": {"to": {"enabled": True}},
+            "font": {"size": 10},
+            "color": {"color": "#c8c8c8"},
+            "smooth": False,
+        },
+        "nodes": {"font": {"size": 13}},
+        "interaction": {"hover": True, "tooltipDelay": 100},
     }))
-    return net
+    return net, len(local_edges), len(shown_edges)
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +165,7 @@ def render_kg(kg_data, highlight_path=None):
 # ---------------------------------------------------------------------------
 
 def step_question(data):
-    st.markdown('<div class="step-header">📋 Step 1: The Question</div>', unsafe_allow_html=True)
+    st.markdown('<div class="step-header">Step 1: The Question</div>', unsafe_allow_html=True)
     col1, col2 = st.columns([2, 1])
     with col1:
         st.markdown(f"### {data['question']}")
@@ -146,20 +178,46 @@ def step_question(data):
             st.markdown("**Ground truth:** " + ", ".join(data["answers"]))
 
 
-def step_kg(kg_data):
-    st.markdown('<div class="step-header">🕸️ Step 2: Knowledge Graph Subgraph</div>', unsafe_allow_html=True)
-    st.markdown("The KG subgraph around the question entities. Red = start entities, blue = neighbours.")
+def step_kg(data):
+    st.markdown('<div class="step-header">Step 2: Knowledge Graph Subgraph</div>', unsafe_allow_html=True)
+    kg_data = data["kg"]
     try:
-        net = render_kg(kg_data)
-        net.save_graph(str(_DEMO_DIR / "_temp_kg.html"))
-        st.components.v1.html(open(_DEMO_DIR / "_temp_kg.html").read(), height=420, scrolling=True)
+        net, total_local, shown = render_kg(kg_data, data.get("gated_paths"))
+        import streamlit.components.v1 as components
+        components.html(net.generate_html(notebook=False), height=440, scrolling=True)
+        st.caption(
+            f"Showing {shown} of {total_local} direct relations from the start entity "
+            f"(the full retrieved subgraph has {len(kg_data['edges'])} edges — too dense to "
+            "render meaningfully). Red = start entity, green = reached by an admitted path, "
+            "blue = other neighbours."
+        )
     except Exception as e:
         st.warning(f"Could not render interactive graph: {e}")
         st.json(kg_data)
 
 
+def _render_gated_path(p, struck_through=False):
+    """Render one path plus its per-hop range/type gate verdicts."""
+    steps_html = ""
+    for s in p["steps"]:
+        range_sym = '<span class="gate-pass">&#10003;</span>' if s["range_gate"] else '<span class="gate-fail">&#10007;</span>'
+        type_sym = ""
+        if "type_gate" in s:
+            type_sym = (' <span class="gate-pass">&#10003;</span>' if s["type_gate"]
+                        else ' <span class="gate-fail">&#10007;</span>')
+        steps_html += (
+            f'<span class="entity-tag">{s["head"]}</span> '
+            f'<span class="relation-tag">{s["relation"]}</span> '
+            f'<span class="entity-tag">{s["tail"]}</span> '
+            f'{range_sym}{type_sym} &nbsp;&nbsp; '
+        )
+    path_line = f"~~{p['path']}~~" if struck_through else f"**{p['path']}**"
+    st.markdown(path_line, unsafe_allow_html=True)
+    st.markdown(steps_html, unsafe_allow_html=True)
+
+
 def step_type_oracle(gated_data):
-    st.markdown('<div class="step-header">🔬 Step 3: TypeOracle Semantic Gates</div>', unsafe_allow_html=True)
+    st.markdown('<div class="step-header">Step 3: TypeOracle Semantic Gates</div>', unsafe_allow_html=True)
 
     at = gated_data.get("answer_types", [])
     if at:
@@ -174,44 +232,20 @@ def step_type_oracle(gated_data):
     rejected = [p for p in gated_data["paths"] if not p["admitted"]]
 
     if admitted:
-        st.markdown("#### ✅ Admitted paths (pass both gates)")
+        st.markdown("#### Admitted paths (pass both gates)")
         for p in admitted:
-            steps_html = ""
-            for s in p["steps"]:
-                range_sym = "✅" if s["range_gate"] else "❌"
-                type_sym = ""
-                if "type_gate" in s:
-                    type_sym = " ✅" if s["type_gate"] else " ❌"
-                steps_html += (
-                    f'<span class="entity-tag">{s["head"]}</span> '
-                    f'<span class="relation-tag">{s["relation"]}</span> '
-                    f'<span class="entity-tag">{s["tail"]}</span> '
-                    f'{range_sym}{type_sym} &nbsp;&nbsp; '
-                )
-            st.markdown(f"**{p['path']}**", unsafe_allow_html=True)
+            _render_gated_path(p)
 
     if rejected:
-        st.markdown("#### ❌ Rejected paths (fail a gate)")
+        st.markdown("#### Rejected paths (fail a gate)")
         for p in rejected[:15]:  # cap at 15 for readability
-            steps_html = ""
-            for s in p["steps"]:
-                range_sym = "✅" if s["range_gate"] else "❌"
-                type_sym = ""
-                if "type_gate" in s:
-                    type_sym = " ✅" if s["type_gate"] else " ❌"
-                steps_html += (
-                    f'<span class="entity-tag">{s["head"]}</span> '
-                    f'<span class="relation-tag">{s["relation"]}</span> '
-                    f'<span class="entity-tag">{s["tail"]}</span> '
-                    f'{range_sym}{type_sym} &nbsp;&nbsp; '
-                )
-            st.markdown(f"~~{p['path']}~~", unsafe_allow_html=True)
+            _render_gated_path(p, struck_through=True)
         if len(rejected) > 15:
             st.markdown(f"*... and {len(rejected) - 15} more rejected paths*")
 
 
 def step_constrained_decoding(data):
-    st.markdown('<div class="step-header">⚙️ Step 4: Constrained Decoding</div>', unsafe_allow_html=True)
+    st.markdown('<div class="step-header">Step 4: Constrained Decoding</div>', unsafe_allow_html=True)
     st.markdown("""
     The LLM generates a reasoning path **one hop at a time**. At each step:
     1. TypeOracle enumerates valid 1-hop paths from the current head entity
@@ -220,55 +254,60 @@ def step_constrained_decoding(data):
     4. If no valid paths exist → dead end, beam dropped (no backtracking)
     """)
 
-    # Show the hop-by-hop process
-    hops = [
-        {"hop": 1, "head": data["entities"][0] if data.get("entities") else "?",
-         "action": "Enumerate gated paths → build trie → LLM generates one hop"},
-    ]
-    if data.get("gated_paths", {}).get("admitted_paths", 0) > 0:
-        admitted = [p for p in data["gated_paths"]["paths"] if p["admitted"]]
-        if admitted:
-            first_path = admitted[0]["path"]
-            segments = first_path.split(" -> ")
-            for i in range(0, len(segments) - 1, 2):
-                hop_num = i // 2 + 1
-                head = segments[i]
-                rel = segments[i + 1] if i + 1 < len(segments) else "?"
-                tail = segments[i + 2] if i + 2 < len(segments) else "?"
-                hops.append({
-                    "hop": hop_num + 1,
-                    "head": head,
-                    "rel": rel,
-                    "tail": tail,
-                    "action": f"Generate: {head} → {rel} → {tail}",
-                })
+    dca = data.get("dca_trie_prediction")
+    if not dca or not dca.get("reasoning_path"):
+        st.info("No saved model run for this question — reasoning path unavailable in pre-computed mode.")
+        return
 
-    for h in hops:
-        if "rel" in h:
-            st.markdown(
-                f"**Hop {h['hop']}:** "
-                f'<span class="entity-tag">{h["head"]}</span> '
-                f'<span class="relation-tag">{h["rel"]}</span> '
-                f'<span class="entity-tag">{h["tail"]}</span>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(f"**Hop {h['hop']}:** {h['action']}")
+    st.markdown("**Actual reasoning path chosen by the LLM (real saved model output, not a re-enumeration):**")
+    segments = [s.strip() for s in dca["reasoning_path"].split(" -> ")]
+    for i in range(0, len(segments) - 2, 2):
+        hop_num = i // 2 + 1
+        head, rel, tail = segments[i], segments[i + 1], segments[i + 2]
+        st.markdown(
+            f"**Hop {hop_num}:** "
+            f'<span class="entity-tag">{head}</span> '
+            f'<span class="relation-tag">{rel}</span> '
+            f'<span class="entity-tag">{tail}</span>',
+            unsafe_allow_html=True,
+        )
 
 
 def step_answer(data):
-    st.markdown('<div class="step-header">🎯 Step 5: Final Answer</div>', unsafe_allow_html=True)
-    # Extract answer from the admitted path
-    admitted = [p for p in data.get("gated_paths", {}).get("paths", []) if p["admitted"]]
-    if admitted:
-        best_path = admitted[0]["path"]
-        answer = best_path.split(" -> ")[-1]
-        st.markdown(f'<div class="answer-box">Predicted answer: <strong>{answer}</strong></div>',
+    st.markdown('<div class="step-header">Step 5: Final Answer</div>', unsafe_allow_html=True)
+
+    gcr = data.get("gcr_prediction")
+    dca = data.get("dca_trie_prediction")
+    gt = ", ".join(data.get("answers", []))
+
+    if not gcr and not dca:
+        st.markdown('<div class="answer-box">No saved model prediction for this question.</div>',
                     unsafe_allow_html=True)
-        st.markdown(f"Ground truth: {', '.join(data.get('answers', []))}")
-    else:
-        st.markdown('<div class="answer-box">No valid path found (dead end)</div>',
-                    unsafe_allow_html=True)
+        return
+
+    col1, col2 = st.columns(2)
+    for col, label, pred in [(col1, "GCR Baseline", gcr), (col2, "DCA-Trie v1", dca)]:
+        with col:
+            st.markdown(f"**{label}**")
+            if pred is None:
+                st.markdown('<div class="answer-box">No saved prediction</div>', unsafe_allow_html=True)
+                continue
+            verdict_class = "gate-pass" if pred["correct"] else "gate-fail"
+            verdict = "correct" if pred["correct"] else "incorrect"
+            st.markdown(
+                f'<div class="answer-box">{pred["answer"]}<br>'
+                f'<span class="{verdict_class}">({verdict})</span></div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown(f"**Ground truth:** {gt}")
+
+    if gcr and dca and gcr["answer"] != dca["answer"]:
+        st.caption(
+            "GCR and DCA-Trie v1 disagree on this question — TypeOracle's filtering changed which "
+            "reasoning path the LLM committed to. This is a concrete instance of the accuracy trade-off "
+            "discussed in the results (see Chapter 4)."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +315,7 @@ def step_answer(data):
 # ---------------------------------------------------------------------------
 
 def main():
-    st.title("🧠 DCA-Trie: Graph-Constrained Reasoning Demo")
+    st.title("DCA-Trie: Graph-Constrained Reasoning Demo")
     st.markdown("Walk through how DCA-Trie constrains an LLM to reason over a knowledge graph, step by step.")
 
     manifest = load_manifest()
@@ -299,12 +338,42 @@ def main():
         st.error("Could not load sample data.")
         return
 
-    # Run steps
-    step_question(data)
-    step_kg(data["kg"])
-    step_type_oracle(data["gated_paths"])
-    step_constrained_decoding(data)
-    step_answer(data)
+    # ------------------------------------------------------------------
+    # Step-by-step navigation state
+    # ------------------------------------------------------------------
+    STEPS = [
+        ("Question", step_question, data),
+        ("Knowledge Graph", step_kg, data),
+        ("TypeOracle Gates", step_type_oracle, data["gated_paths"]),
+        ("Constrained Decoding", step_constrained_decoding, data),
+        ("Final Answer", step_answer, data),
+    ]
+
+    if st.session_state.get("_sample_idx") != sample_idx:
+        st.session_state["_sample_idx"] = sample_idx
+        st.session_state["_step"] = 0
+    current = st.session_state.get("_step", 0)
+
+    nav_prev, nav_progress, nav_next = st.columns([1, 4, 1])
+    with nav_prev:
+        if st.button("Back", disabled=current == 0, use_container_width=True):
+            st.session_state["_step"] = current - 1
+            st.rerun()
+    with nav_next:
+        if st.button("Next", disabled=current == len(STEPS) - 1, use_container_width=True, type="primary"):
+            st.session_state["_step"] = current + 1
+            st.rerun()
+    with nav_progress:
+        st.progress((current + 1) / len(STEPS))
+        st.caption(f"Step {current + 1} of {len(STEPS)}: **{STEPS[current][0]}**")
+
+    st.divider()
+
+    # Render every step up to and including the current one, so earlier
+    # steps stay visible for context while the story builds up live.
+    for _, render, arg in STEPS[: current + 1]:
+        render(arg)
+        st.divider()
 
     # Footer
     st.sidebar.markdown("---")
