@@ -118,6 +118,8 @@ def run(argv=None):
     )
     parser.add_argument("--prompt-mode", default="zero-shot")
     parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--beam-size", type=int, default=5,
+                        help="Beam size for v2 iterative decoding (default: 5)")
     parser.add_argument("--max-samples", type=int, default=50)
     parser.add_argument("--method", default="all", choices=["baseline", "v1", "v2", "all"])
     parser.add_argument("--output-dir", type=str, default=None)
@@ -173,7 +175,8 @@ def _run(args, output_base):
         "datasets": args.datasets, "split": args.split,
         "index_len": args.index_len, "k": args.k,
         "gen_mode": args.gen_mode, "prompt_mode": args.prompt_mode,
-        "max_new_tokens": args.max_new_tokens, "max_samples": args.max_samples,
+        "max_new_tokens": args.max_new_tokens, "beam_size": args.beam_size,
+        "max_samples": args.max_samples,
         "method": args.method, "attn_impl": attn_impl, "gpu": gpu_name,
         "sample_timeout_s": args.sample_timeout,
     }
@@ -236,6 +239,7 @@ def _run(args, output_base):
                 force_rerun=args.force_rerun, index_len=args.index_len,
                 max_new_tokens=args.max_new_tokens,
                 sample_timeout_s=args.sample_timeout,
+                beam_size=args.beam_size,
             )
             all_summary[(ds_name, cond)] = metrics
 

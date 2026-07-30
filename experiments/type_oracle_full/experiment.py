@@ -126,7 +126,7 @@ def _run_v1(model, input_builder, data, qid, cond_name, oracle, index_len, **_kw
     return result, True
 
 
-def _run_v2(model, input_builder, data, qid, cond_name, oracle, index_len, max_new_tokens):
+def _run_v2(model, input_builder, data, qid, cond_name, oracle, index_len, max_new_tokens, beam_size=5):
     """Run v2 dynamic type-oracle.  Returns (result_dict | None, trie_ok)."""
     nx_graph = graph_utils.build_graph(data["graph"], undirected=False)
     prediction = dca_v2_generate(
@@ -138,6 +138,7 @@ def _run_v2(model, input_builder, data, qid, cond_name, oracle, index_len, max_n
         max_hops=index_len,
         max_new_tokens=max_new_tokens,
         input_builder=input_builder,
+        beam_size=beam_size,
     )
     if prediction is None:
         logger.debug("Sample %s: v2 returned no prediction (dead end)", qid)
@@ -163,6 +164,7 @@ def run_condition(
     index_len,
     max_new_tokens,
     sample_timeout_s,
+    beam_size=5,
 ):
     """Run a single condition and return a metrics dict."""
     pred_path = ds_dir / f"predictions_{cond_name}.jsonl"
@@ -214,6 +216,7 @@ def run_condition(
                         model, input_builder, d, qid, cond_name, oracle,
                         index_len=index_len,
                         max_new_tokens=max_new_tokens,
+                        beam_size=beam_size,
                     )
             except TimeoutError:
                 logger.warning("Sample %s timed out after %ds", qid, sample_timeout_s)
