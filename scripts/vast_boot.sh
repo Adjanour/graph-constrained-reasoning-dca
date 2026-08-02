@@ -53,8 +53,8 @@ if [ -n "${HF_TOKEN:-}" ]; then
 fi
 
 # ── 3. Install dependencies ───────────────────────────────────────
-echo "Running setup.sh..." | tee -a "$LOG"
-bash experiments/type_oracle_full/setup.sh 2>&1 | tee -a "$LOG"
+echo "Running setup-env.sh..." | tee -a "$LOG"
+bash scripts/setup-env.sh 2>&1 | tee -a "$LOG"
 
 # ── 4. Persist environment for SSH sessions ────────────────────────
 env >> /etc/environment 2>/dev/null || true

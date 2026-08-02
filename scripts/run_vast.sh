@@ -24,7 +24,7 @@
 #   bash scripts/run_vast.sh --datasets RoG-webqsp --output-dir results/final_experiment/run1
 #   bash scripts/run_vast.sh --datasets RoG-cwq    --output-dir results/final_experiment/run1
 #
-# All extra arguments are forwarded to experiments/type_oracle_full/run.sh.
+# All extra arguments are forwarded to experiments/type_oracle_full/main.py.
 
 set -euo pipefail
 
@@ -44,7 +44,7 @@ RESULTS_DIR="$PROJECT_ROOT/results_from_vast"
 OFFER_ID=""
 GPU_FILTER="RTX_4090"
 REGION=""
-EXPERIMENT="main"   # main | 4ideas | adaptive-budget
+EXPERIMENT="all"   # all | baseline | v1 | v2 | v2-nogates | ablation
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -263,7 +263,7 @@ echo "→ Starting experiment..."
 ssh $SSH_OPTS -p "$SSH_PORT" "root@$SSH_HOST" \
     "cd /workspace/graph-constrained-reasoning && \
      source /venv/main/bin/activate && \
-     nohup bash experiments/type_oracle_full/run.sh --experiment $EXPERIMENT ${EXTRA_ARGS[*]:-} \
+     nohup uv run python experiments/type_oracle_full/main.py --method $EXPERIMENT ${EXTRA_ARGS[*]:-} \
          > /workspace/experiment.log 2>&1 &"
 
 echo "→ Experiment running. Monitoring every ${POLL_EXPERIMENT}s..."

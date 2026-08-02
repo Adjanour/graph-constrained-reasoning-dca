@@ -17,9 +17,14 @@ v2 combines two orthogonal ideas:
 
 The result is a *topologically-structured, semantically-pruned* trie that
 constrains generation at each hop.
+
+NOTE on Freebase IDs: The LLM CAN generate Freebase ID tokens (they are
+in the trie from the training data).  We do NOT filter them — that would
+destroy 11% of answer reachability (measured: 94%→89% after v2 filtering).
+Instead, gates run on ALL neighbors regardless of whether they are named
+entities or IDs.
 """
 
-import re
 from dataclasses import dataclass, field
 from typing import List, Set
 
@@ -28,18 +33,6 @@ import torch
 from src.graph_constrained_decoding import GraphConstrainedDecoding
 from trie_utils import build_trie_from_strings
 from utils import PATH_START, PATH_END, logger
-
-
-# ---------------------------------------------------------------------------
-# Freebase ID detection — nodes like "m.0k8nh0b" or "g.12tb6gh4f" are opaque
-# IDs that the LLM can never generate.  Filter them from trie paths.
-# ---------------------------------------------------------------------------
-
-_FB_ID_RE = re.compile(r"^[gm]\.\w+$")
-
-
-def _is_freebase_id(name: str) -> bool:
-    return bool(_FB_ID_RE.match(name))
 
 
 # ---------------------------------------------------------------------------
@@ -90,24 +83,25 @@ def _get_gated_paths(
     answer_types,
     hop: int,
     max_hops: int,
+    gates_enabled: bool = True,
 ) -> List[str]:
     """
-    Collect TypeOracle-gated 1-hop paths from head_entity.
+    Collect 1-hop paths from head_entity.
 
-    Filters out Freebase IDs — the model can never generate them.
+    When gates_enabled=True (default): applies range_gate and type_gate.
+    When gates_enabled=False: admits ALL neighbors (DoG-proxy ablation).
     """
     paths = []
     if head_entity not in nx_graph:
         return paths
 
     for neighbor in nx_graph.neighbors(head_entity):
-        if _is_freebase_id(neighbor):
-            continue
         rel = nx_graph[head_entity][neighbor]["relation"]
-        if not oracle.range_gate(rel, neighbor):
-            continue
-        if hop >= max_hops and not oracle.type_gate(neighbor, answer_types, hop, max_hops):
-            continue
+        if gates_enabled:
+            if not oracle.range_gate(rel, neighbor):
+                continue
+            if hop >= max_hops and not oracle.type_gate(neighbor, answer_types, hop, max_hops):
+                continue
         paths.append(f"{head_entity} -> {rel} -> {neighbor}")
 
     return paths
@@ -127,6 +121,8 @@ def dca_v2_generate(
     max_new_tokens,
     input_builder,
     beam_size: int = 5,
+    gates_enabled: bool = True,
+    collect_metrics: bool = False,
 ):
     """
     DCA-Trie v2: iterative hop-by-hop trie expansion with beam search.
@@ -140,8 +136,25 @@ def dca_v2_generate(
       5. Score each beam using the model's log-probabilities.
       6. Keep the top beam_size beams for the next hop.
 
-    Returns the best beam's path.
+    Parameters
+    ----------
+    gates_enabled : bool
+        If True (default), apply TypeOracle gates.  If False, admit all
+        neighbors (DoG-proxy ablation).
+    collect_metrics : bool
+        If True, return (prediction, metrics_dict) instead of just prediction.
+
+    Returns
+    -------
+    prediction : str or None
+    metrics : dict (only if collect_metrics=True)
     """
+    from ablation_metrics import (
+        HopSnapshot, AblationMetrics,
+        compute_bur, compute_sir_trajectory,
+        compute_rebuild_volatility, compute_rv,
+    )
+
     question = data["question"]
     start_entities = data.get("q_entity", [])
     answer_types = oracle.infer_answer_types(question)
@@ -157,13 +170,22 @@ def dca_v2_generate(
             prompt = prompt[:idx].rstrip()
             break
 
+    # ── Metrics collection state ──
+    metrics = AblationMetrics(qid=data["id"]) if collect_metrics else None
+    prev_tokens: Set[int] = set()
+    before_counts: List[int] = []
+    after_counts: List[int] = []
+    token_sets_before: List[Set[int]] = []
+    token_sets_after: List[Set[int]] = []
+
     # ------------------------------------------------------------------
     # Phase 1: Initialize beams from first-hop gated paths
     # ------------------------------------------------------------------
     initial_beams = []
     for entity in start_entities:
         first_hop_paths = _get_gated_paths(
-            nx_graph, entity, oracle, answer_types, 1, max_hops
+            nx_graph, entity, oracle, answer_types, 1, max_hops,
+            gates_enabled=gates_enabled,
         )
         if first_hop_paths:
             initial_beams.append(
@@ -172,7 +194,7 @@ def dca_v2_generate(
 
     if not initial_beams:
         logger.warning("v2: No initial beams from first-hop paths")
-        return None
+        return (None, metrics.to_dict()) if collect_metrics else None
 
     # ------------------------------------------------------------------
     # Phase 2: Iterate hops with beam search
@@ -184,22 +206,43 @@ def dca_v2_generate(
             break
 
         new_beams = []
+        hop_beams_in = len(current_beams)
+
         for beam in current_beams:
             # ---- Step 1: topological enumeration + semantic pruning ----
-            allowed_paths: List[str] = []
+            all_1hop: List[str] = []
             for head in beam.head_pool:
+                neighbor_count = len(list(nx_graph.neighbors(head))) if head in nx_graph else 0
                 paths = _get_gated_paths(
-                    nx_graph, head, oracle, answer_types, hop, max_hops
+                    nx_graph, head, oracle, answer_types, hop, max_hops,
+                    gates_enabled=gates_enabled,
                 )
-                allowed_paths.extend(paths)
+                all_1hop.extend(paths)
 
-            if not allowed_paths:
+            if not all_1hop:
                 continue
+
+            # ---- Metrics: record before/after counts ----
+            if collect_metrics:
+                # Count total 1-hop before gating (recompute without gates)
+                raw_count = 0
+                for head in beam.head_pool:
+                    if head in nx_graph:
+                        raw_count += len(list(nx_graph.neighbors(head)))
+                before_counts.append(raw_count)
+                after_counts.append(len(all_1hop))
 
             # ---- Step 2: build per-beam trie ----
-            trie = build_trie_from_strings(tokenizer, allowed_paths)
+            trie = build_trie_from_strings(tokenizer, all_1hop)
             if trie is None:
                 continue
+
+            # ---- Metrics: record token set volatility ----
+            if collect_metrics:
+                current_tokens = set(trie.token_to_id.keys()) if hasattr(trie, 'token_to_id') else set()
+                token_sets_before.append(prev_tokens.copy())
+                token_sets_after.append(current_tokens)
+                prev_tokens = current_tokens
 
             # ---- Step 3: build prompt for THIS hop ----
             hop_prompt = f"{beam.sequence}\n{PATH_START}"
@@ -216,7 +259,7 @@ def dca_v2_generate(
                 enable_constrained_by_default=True,
             )
 
-            local_num_beams = min(beam_size, len(allowed_paths))
+            local_num_beams = min(beam_size, len(all_1hop))
             if local_num_beams < 2:
                 local_num_beams = 1
 
@@ -278,16 +321,66 @@ def dca_v2_generate(
         # Keep top-beam_size beams
         current_beams = sorted(new_beams, key=lambda b: b.score, reverse=True)[:beam_size]
 
+        # ---- Metrics: record hop snapshot ----
+        if collect_metrics:
+            terminals = []
+            for b in current_beams:
+                path_content = _extract_path_content(b.sequence)
+                if path_content:
+                    segs = [s.strip() for s in path_content.split(" -> ")]
+                    if segs:
+                        terminals.append(segs[-1])
+
+            metrics.hops.append(HopSnapshot(
+                hop=hop,
+                n_allowed_paths=after_counts[-1] if after_counts else 0,
+                n_trie_paths=len(all_1hop) if all_1hop else 0,
+                n_before_paths=before_counts[-1] if before_counts else 0,
+                tokens_before=token_sets_before[-1] if token_sets_before else set(),
+                tokens_after=token_sets_after[-1] if token_sets_after else set(),
+                beams_in=hop_beams_in,
+                beams_out=len(current_beams),
+                terminal_entities=terminals,
+            ))
+
     # ------------------------------------------------------------------
     # Phase 3: extract answer from best beam
     # ------------------------------------------------------------------
+    prediction = None
     if current_beams:
         best_beam = current_beams[0]
         path_content = _extract_path_content(best_beam.sequence)
         if path_content:
-            return f"{PATH_START}{path_content}{PATH_END}"
+            prediction = f"{PATH_START}{path_content}{PATH_END}"
 
-    return None
+    # ---- Compute final metrics ----
+    if collect_metrics:
+        # BUR
+        all_terminals = []
+        for b in current_beams:
+            pc = _extract_path_content(b.sequence)
+            if pc:
+                segs = [s.strip() for s in pc.split(" -> ")]
+                if segs:
+                    all_terminals.append(segs[-1])
+        metrics.bur, metrics.bur_entropy = compute_bur(all_terminals)
+
+        # SIR trajectory
+        metrics.sir_curve, metrics.sir_decay_slope = compute_sir_trajectory(
+            before_counts, after_counts
+        )
+
+        # Rebuild volatility
+        metrics.volatility_curve = compute_rebuild_volatility(
+            token_sets_before, token_sets_after
+        )
+
+        # RV
+        metrics.rv_curve = compute_rv(before_counts, after_counts)
+
+        return prediction, metrics.to_dict()
+
+    return prediction
 
 
 def _extract_path_content(text: str) -> str | None:

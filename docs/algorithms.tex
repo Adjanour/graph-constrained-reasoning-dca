@@ -1,0 +1,539 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue}
+
+% ── Notation ──────────────────────────────────────────────────────────
+\newcommand{\G}{\mathcal{G}}
+\newcommand{\T}{\mathcal{T}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\R}{\mathcal{R}}
+\newcommand{\Types}{\mathrm{Types}}
+\newcommand{\range}{\mathrm{range}}
+\newcommand{\True}{\mathsf{true}}
+\newcommand{\admiss}{\mathrm{admissible}}
+
+\DeclareMathOperator*{\argmax}{arg\,max}
+
+% ── Theorems ──────────────────────────────────────────────────────────
+\newtheorem{definition}{Definition}
+\newtheorem{proposition}{Proposition}
+
+\title{Graph-Constrained Reasoning with Symbolic Type Gates:\\
+The GCR Baseline and DCA-Trie Algorithms}
+\author{Bernard Katamanso}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+%======================================================================
+\section{Introduction}
+%======================================================================
+
+Large language models (LLMs) can reason over knowledge graphs (KGs) by
+generating natural language reasoning paths that traverse edges in the
+graph.  \emph{Graph-constrained decoding} (GCD) enforces this traversal
+by restricting the LLM's vocabulary at each decode step to tokens that
+correspond to valid edges in the KG.
+
+This technical report describes two algorithms for graph-constrained
+reasoning:
+
+\begin{enumerate}[label=\textbf{A\arabic*},leftmargin=2.5em]
+  \item \textbf{GCR Baseline.}  Single-pass constrained decoding over
+    a pre-built trie containing all valid paths up to $L$ hops.
+  \item \textbf{DCA-Trie.}  Two variants that add symbolic type gates
+    (from a TypeOracle) to constrain which edges enter the trie:
+    \begin{enumerate}[label=(\alph*)]
+      \item \textbf{v1 Static.}  Pre-filters all paths through the
+        TypeOracle before building the trie.
+      \item \textbf{v2 Iterative.}  Hop-by-hop trie expansion with
+        beam search, applying type gates at each step.
+    \end{enumerate}
+\end{enumerate}
+
+Both algorithms share the same underlying machinery---a trie that
+constrains the LLM's token vocabulary---but differ in \emph{which
+paths enter the trie} and \emph{how many forward passes} are required.
+
+%======================================================================
+\section{Preliminaries}
+%======================================================================
+
+\subsection{Knowledge Graph}
+
+\begin{definition}[Knowledge Graph]
+A knowledge graph is a tuple $\G = (V, E, \R)$ where $V$ is a set of
+entities, $\R$ is a set of relation types, and $E \subseteq V \times
+\R \times V$ is a set of labeled edges.
+\end{definition}
+
+Given a natural language question $q$, a KG subgraph $\G_q \subseteq
+\G$ is extracted containing entities mentioned in $q$ and their
+neighbours up to $L$ hops.  The question entities are $V_q \subseteq
+V$.
+
+\subsection{Reasoning Path}
+
+\begin{definition}[Reasoning Path]
+A reasoning path of length $L$ through $\G$ is a chain
+\[
+  c = (v_0, e_1, v_1, e_2, v_2, \ldots, e_L, v_L)
+\]
+where $v_0 \in V_q$ and $(v_{l-1}, e_l, v_l) \in E$ for all $l
+\in \{1, \ldots, L\}$.
+\end{definition}
+
+The terminal entity $v_L$ is the candidate answer.
+
+\subsection{Trie}
+
+\begin{definition}[Trie]
+A trie $\T$ is a prefix tree over token sequences.  Given a tokenizer
+$\phi$, each reasoning path $c$ is encoded as a token sequence
+$\phi(c) = (t_1, t_2, \ldots, t_n)$.  The trie stores all such
+sequences and supports prefix-constrained generation: at each decode
+step with prefix $p$, the set of valid next tokens is
+\[
+  \T(p) = \{ t \mid \exists\, \text{sequence in } \T \text{ starting
+  with } p \cdot t \}.
+\]
+\end{definition}
+
+\subsection{Constrained Decoding}
+
+Given a prompt $\mathbf{x}$ encoding the question $q$, an LLM produces
+token probabilities $P(t_l \mid t_{<l}, \mathbf{x})$ at each step
+$l$.  Constrained decoding modifies this to
+\[
+  P_{\T}(t_l \mid t_{<l}, \mathbf{x}) =
+  \begin{cases}
+    \frac{P(t_l \mid t_{<l}, \mathbf{x})}{\sum_{t' \in \T(t_{<l})}
+    P(t' \mid t_{<l}, \mathbf{x})} & \text{if } t_l \in \T(t_{<l}), \\
+    0 & \text{otherwise}.
+  \end{cases}
+\]
+
+This is implemented via a \texttt{prefix\_allowed\_tokens\_fn} callback
+that returns $\T(p)$ at each decode step, masking out all other tokens
+with $-\infty$ log-probability.
+
+%======================================================================
+\section{Algorithm~1: GCR Baseline}
+%======================================================================
+
+The GCR baseline (Luo et al., 2025) performs single-pass constrained
+decoding over a trie built from \emph{all} reachable paths.
+
+\subsection{Procedure}
+
+\begin{enumerate}
+  \item \textbf{Subgraph extraction.}  Extract $\G_q$ from $\G$ using
+    the question entities $V_q$.
+  \item \textbf{Path enumeration.}  Run depth-first search (DFS) from
+    each $v \in V_q$ up to $L$ hops, collecting all simple paths.
+  \item \textbf{Trie construction.}  Tokenize each path string and
+    insert into a MarisaTrie.
+  \item \textbf{Constrained generation.}  Run the LLM with the trie
+    constraint, generating the full reasoning path and answer in one
+    forward pass.
+\end{enumerate}
+
+\begin{algorithm}[H]
+\caption{GCR Baseline: Single-Pass Constrained Decoding}
+\label{alg:baseline}
+\begin{algorithmic}[1]
+\Require question $q$, entities $V_q$, KG subgraph $\G_q$, max hops
+  $L$, LLM $\mathcal{M}$, tokenizer $\phi$
+\Ensure reasoning path $c^*$, answer $a$
+\State $\mathcal{P} \gets \textsc{DFS}(\G_q, V_q, L)$
+  \Comment{enumerate all paths}
+\State $\T \gets \textsc{BuildTrie}(\phi, \mathcal{P})$
+  \Comment{insert all path tokens}
+\State $\mathbf{x} \gets \textsc{Prompt}(q)$
+  \Comment{encode question as prompt}
+\State $c^* \gets \mathcal{M}.\textsc{Generate}(\mathbf{x}, \T)$
+  \Comment{single-pass constrained decoding}
+\State $a \gets \textsc{ExtractAnswer}(c^*)$
+\State \Return $c^*, a$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Properties}
+
+\begin{itemize}
+  \item \textbf{Completeness.}  Every reachable path up to $L$ hops is
+    in the trie.  The LLM can choose any of them.
+  \item \textbf{Single forward pass.}  The entire path is generated in
+    one call to $\mathcal{M}.\textsc{Generate}$.
+  \item \textbf{No semantic filtering.}  All topologically valid paths
+    are admitted, regardless of type compatibility.
+  \item \textbf{Trie size.}  $|\mathcal{P}| = O(d^L)$ paths, where $d$
+    is the average out-degree.  For typical KG subgraphs ($d \approx
+    20$, $L = 2$), this yields thousands of paths.
+\end{itemize}
+
+%======================================================================
+\section{Algorithm~2: DCA-Trie}
+%======================================================================
+
+DCA-Trie adds a \emph{TypeOracle} that applies symbolic type gates to
+filter paths before they enter the trie.  The key insight: not all
+topologically valid paths are semantically coherent.
+
+\subsection{The TypeOracle}
+
+The TypeOracle is a purely symbolic component that extracts type
+information from the KG's ontology schema (Freebase
+\texttt{common.topic.notable\_types}, \texttt{rdf-schema\#range},
+etc.).  It provides two gates:
+
+\begin{definition}[Range Gate]
+Given a relation $e \in \R$ and a tail entity $v$, the range gate
+checks whether $v$'s types are compatible with $e$'s declared range:
+\[
+  \range\textsc{Gate}(e, v) \;\iff\;
+  \T(v) \cap \range(e) \neq \emptyset
+  \;\lor\; \T(v) = \emptyset
+  \;\lor\; \range(e) = \emptyset.
+\]
+The empty-set disjuncts make the gate \emph{conservative}: if types
+are unknown, the path is admitted.
+\end{definition}
+
+\begin{definition}[Type Gate]
+Given a candidate terminal entity $v$, expected answer types $A
+\subseteq \Types$, hop index $l$, and max hops $L$, the type gate
+checks:
+\[
+  \textsc{TypeGate}(v, A, l, L) \;\iff\;
+  l < L
+  \;\lor\; A = \emptyset
+  \;\lor\; \T(v) = \emptyset
+  \;\lor\; \T(v) \cap A \neq \emptyset.
+\]
+At intermediate hops ($l < L$), the gate always passes.  At the
+terminal hop, it checks type compatibility with the expected answer
+types.
+\end{definition}
+
+\begin{definition}[Admissibility]
+A candidate edge $(e_l, v_l)$ is \emph{admissible} iff it passes both
+gates:
+\[
+  \admiss(e_l, v_l) \;=\; \range\textsc{Gate}(e_l, v_l)
+  \;\land\; \textsc{TypeGate}(v_l, A, l, L).
+\]
+\end{definition}
+
+\subsection{Answer Type Inference}
+
+The expected answer types $A$ are inferred from the question string via
+pattern matching:
+\[
+  A = \bigcup_{\text{pattern}(q) \to T_k} T_k
+\]
+where $T_k$ are pre-defined type sets (e.g., ``\emph{who}'' $\to$
+$\mathrm{PersonTypes}$, ``\emph{where}'' $\to$
+$\mathrm{LocationTypes}$).  If no pattern matches, $A = \emptyset$
+(unconstrained), and the type gate passes everything.
+
+\subsection{Algorithm~2a: DCA-Trie v1 (Static)}
+
+v1 is a direct refinement of the GCR baseline: filter paths through
+the TypeOracle \emph{before} building the trie.
+
+\begin{algorithm}[H]
+\caption{DCA-Trie v1: Static Type-Oracle Filtering}
+\label{alg:v1}
+\begin{algorithmic}[1]
+\Require question $q$, entities $V_q$, KG subgraph $\G_q$, max hops
+  $L$, LLM $\mathcal{M}$, tokenizer $\phi$, TypeOracle $\Omega$
+\Ensure reasoning path $c^*$, answer $a$
+\State $\mathcal{P} \gets \textsc{DFS}(\G_q, V_q, L)$
+  \Comment{enumerate all paths}
+\State $A \gets \Omega.\textsc{InferAnswerTypes}(q)$
+  \If{$A = \emptyset$}
+    \State $A \gets \Omega.\textsc{InferFromPaths}(\mathcal{P})$
+    \Comment{fallback: use terminal entity types}
+  \EndIf
+\State $\mathcal{P}_{\text{filt}} \gets \{\}$
+\For{$c = (v_0, e_1, v_1, \ldots, e_L, v_L) \in \mathcal{P}$}
+  \If{$\forall\, l:\; \range\textsc{Gate}(e_l, v_l)$ \textbf{and}
+    $\textsc{TypeGate}(v_L, A, L, L)$}
+    \State $\mathcal{P}_{\text{filt}} \gets \mathcal{P}_{\text{filt}}
+      \cup \{c\}$
+  \EndIf
+\EndFor
+\State $\T \gets \textsc{BuildTrie}(\phi, \mathcal{P}_{\text{filt}})$
+\State $\mathbf{x} \gets \textsc{Prompt}(q)$
+\State $c^* \gets \mathcal{M}.\textsc{Generate}(\mathbf{x}, \T)$
+\State $a \gets \textsc{ExtractAnswer}(c^*)$
+\State \Return $c^*, a$
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Properties.}
+\begin{itemize}
+  \item \textbf{Same single forward pass} as the baseline.
+  \item \textbf{Smaller trie.}  Filtering removes type-incompatible
+    paths, typically reducing trie size by 25\% (WebQSP) to 40\% (CWQ).
+  \item \textbf{Risk: over-filtering.}  If the TypeOracle is too
+    aggressive, correct paths are removed and the answer becomes
+    unreachable.  This is measured by the \emph{false negative rate}
+    (FNR) of the oracle.
+\end{itemize}
+
+\subsection{Algorithm~2b: DCA-Trie v2 (Iterative Beam Search)}
+
+v2 replaces the single-pass approach with hop-by-hop trie expansion.
+At each hop, the trie is rebuilt from the 1-hop neighbours of the
+current beam's head pool, filtered through the TypeOracle.
+
+\begin{definition}[Head Pool]
+For a beam $b$ at step $l$, the head pool $H_b^{(l)} \subseteq V$ is
+the set of entities that are available as starting points for the next
+hop.  Initially $H_b^{(0)} = V_q$.  After each hop, the new entity
+$v_l$ is added: $H_b^{(l)} = H_b^{(l-1)} \cup \{v_l\}$.
+\end{definition}
+
+\begin{definition}[Beam Unit]
+A beam unit is a tuple $b = (\sigma, H_b, s, l)$ where:
+\begin{itemize}
+  \item $\sigma$ is the accumulated prompt (question + generated path
+    so far),
+  \item $H_b$ is the head pool,
+  \item $s$ is the cumulative log-probability score,
+  \item $l$ is the current hop index.
+\end{itemize}
+\end{definition}
+
+\begin{algorithm}[H]
+\caption{DCA-Trie v2: Iterative Beam Search with Type-Oracle Gates}
+\label{alg:v2}
+\begin{algorithmic}[1]
+\Require question $q$, entities $V_q$, KG subgraph $\G_q$, max hops
+  $L$, LLM $\mathcal{M}$, tokenizer $\phi$, TypeOracle $\Omega$,
+  beam size $B$, max new tokens $N$
+\Ensure reasoning path $c^*$, answer $a$
+\State $A \gets \Omega.\textsc{InferAnswerTypes}(q)$
+\State $\mathbf{x} \gets \textsc{Prompt}(q)$
+\State $\mathcal{B}_0 \gets \{\}$
+\For{$v \in V_q$}
+  \State $\mathcal{P}_1 \gets
+    \textsc{GatedPaths}(\G_q, v, \Omega, A, 1, L)$
+  \If{$\mathcal{P}_1 \neq \emptyset$}
+    \State $\mathcal{B}_0 \gets \mathcal{B}_0 \cup
+      \{(\mathbf{x}, \{v\}, 0, 0)\}$
+  \EndIf
+\EndFor
+\If{$\mathcal{B}_0 = \emptyset$} \Return \textsc{None} \EndIf
+\State $\mathcal{B} \gets \mathcal{B}_0$
+\For{$l = 1$ \textbf{to} $L$}
+  \State $\mathcal{B}' \gets \{\}$
+  \For{beam $b = (\sigma, H_b, s, l{-}1) \in \mathcal{B}$}
+    \State $\mathcal{P}_l \gets \{\}$
+    \For{$h \in H_b$}
+      \State $\mathcal{P}_l \gets \mathcal{P}_l \cup
+        \textsc{GatedPaths}(\G_q, h, \Omega, A, l, L)$
+    \EndFor
+    \If{$\mathcal{P}_l = \emptyset$} \textbf{continue} \EndIf
+    \State $\T_b \gets \textsc{BuildTrie}(\phi, \mathcal{P}_l)$
+    \State $\sigma' \gets \sigma \;\|\; \texttt{<PATH>}$
+    \State $\textsc{Results} \gets \mathcal{M}.\textsc{Generate}(
+      \sigma', \T_b, \text{num\_beams}=B, \text{return\_scores}=\True)$
+    \For{$(\text{path}_i, s_i) \in \textsc{Results}$}
+      \State $v_l \gets \textsc{LastEntity}(\text{path}_i)$
+      \State $\sigma'' \gets \sigma \;\|\; \text{path}_i$
+      \State $\mathcal{B}' \gets \mathcal{B}' \cup
+        \{(\sigma'', H_b \cup \{v_l\}, s + s_i, l)\}$
+    \EndFor
+  \EndFor
+  \State $\mathcal{B} \gets \textsc{TopB}(\mathcal{B}', B)$
+  \Comment{keep best $B$ beams by score}
+\EndFor
+\State $b^* \gets \argmax_{b \in \mathcal{B}} b.s$
+\State $c^* \gets \textsc{ParsePath}(b^*.{\sigma})$
+\State $a \gets \textsc{ExtractAnswer}(c^*)$
+\State \Return $c^*, a$
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{The GatedPaths subroutine.}
+
+\begin{algorithm}[H]
+\caption{GatedPaths: 1-Hop Enumerate + Type-Oracle Filter}
+\label{alg:gated}
+\begin{algorithmic}[1]
+\Require head entity $h$, KG $\G_q$, TypeOracle $\Omega$, answer types
+  $A$, hop $l$, max hops $L$
+\Ensure list of allowed 1-hop path strings
+\State $\mathcal{P} \gets \{\}$
+\For{$(h, e, v) \in \G_q.\textsc{Neighbors}(h)$}
+  \If{$\range\textsc{Gate}(e, v)$ \textbf{and}
+    ($l < L$ \textbf{or} $\textsc{TypeGate}(v, A, l, L)$)}
+    \State $\mathcal{P} \gets \mathcal{P} \cup \{h \to e \to v\}$
+  \EndIf
+\EndFor
+\State \Return $\mathcal{P}$
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Properties.}
+\begin{itemize}
+  \item \textbf{Multiple forward passes.}  Each hop requires a separate
+    call to $\mathcal{M}.\textsc{Generate}$.  With $L$ hops and $B$
+    beams, worst case is $L \times B$ forward passes.
+  \item \textbf{Adaptive trie size.}  The trie is rebuilt at each hop
+    from only the 1-hop neighbours of the current head pool, so it is
+    much smaller than the baseline's full-path trie.
+  \item \textbf{Beam search.}  Multiple candidate paths are explored
+    simultaneously, with scores accumulated across hops.
+  \item \textbf{Backtracking.}  If a beam's head pool yields no valid
+    paths, the beam is dropped (not expanded further).
+\end{itemize}
+
+%======================================================================
+\section{Complexity Analysis}
+%======================================================================
+
+\subsection{Path Explosion}
+
+The number of simple paths of length $L$ from a set of start entities
+in a graph with average out-degree $d$ is
+\[
+  |\mathcal{P}| = O(|V_q| \cdot d^L).
+\]
+For WebQSP ($|V_q| \approx 1$, $d \approx 20$, $L = 2$): $|\mathcal{P}|
+\approx 400$ paths.  For CWQ ($d \approx 30$, $L = 3$):
+$|\mathcal{P}| \approx 27{,}000$ paths.
+
+\subsection{Comparison}
+
+\begin{table}[H]
+\centering
+\caption{Complexity comparison of the three algorithms.}
+\label{tab:complexity}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+ & \textbf{GCR Baseline} & \textbf{DCA-Trie v1} &
+  \textbf{DCA-Trie v2} \\
+\midrule
+DFS passes & 1 & 1 & 0 \\
+Trie builds & 1 & 1 & $L$ \\
+Model forward passes & 1 & 1 & $\leq L \times B$ \\
+Trie size (paths) & $O(d^L)$ & $O(d^L)$ & $O(d)$ \\
+Type gates applied & None & All at once & Per hop \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Trie size.}
+The baseline and v1 build one trie from all paths ($O(d^L)$ entries).
+v2 builds a new trie at each hop from only 1-hop neighbours ($O(d)$
+entries per hop), but does so $L$ times.
+
+\paragraph{Model passes.}
+The dominant cost is the LLM forward pass ($\approx$6\,s on an A100 for
+an 8B model).  Baseline and v1 each require one pass.  v2 requires up
+to $L \times B$ passes (one per beam per hop), but in practice many
+beams are pruned early.
+
+\paragraph{When v2 wins.}
+v2 is advantageous when:
+\begin{itemize}
+  \item The graph is large ($d^L$ is huge), so the baseline's trie
+    is unwieldy.
+  \item Type gates are aggressive, so filtering at each hop prunes
+    more effectively than pre-filtering all paths.
+  \item Beam search finds better paths than the baseline's single
+    greedy/group-beam pass.
+\end{itemize}
+
+\paragraph{When baseline/v1 win.}
+The baseline or v1 is advantageous when:
+\begin{itemize}
+  \item The graph is small ($d^L$ is manageable).
+  \item Latency matters (one forward pass vs.\ many).
+  \item Type gates are conservative (few paths removed), so the
+    filtering overhead isn't justified.
+\end{itemize}
+
+%======================================================================
+\section{Relationship Between the Algorithms}
+%======================================================================
+
+The three algorithms form a hierarchy:
+
+\[
+  \text{GCR Baseline} \;\supset\; \text{DCA-Trie v1} \;\subset\;
+  \text{DCA-Trie v2}
+\]
+
+\begin{itemize}
+  \item \textbf{v1 $\subset$ Baseline.}  v1's trie is a subset of the
+    baseline's trie (filtered paths $\subseteq$ all paths).  v1
+    generates from a smaller constraint set.
+  \item \textbf{v2 is not a subset of either.}  v2's per-hop trie
+    expansion explores a different set of paths than the baseline's
+    full DFS.  Because v2 only enumerates 1-hop neighbours at each
+    step (not all $L$-hop paths upfront), it can reach entities that
+    the DFS might miss due to path explosion cutoffs.
+  \item \textbf{All three use the same trie mechanism.}  The
+    \texttt{prefix\_allowed\_tokens\_fn} callback is identical; only
+    the trie's contents differ.
+\end{itemize}
+
+%======================================================================
+\section{Discussion}
+%======================================================================
+
+\subsection{The Role of the TypeOracle}
+
+The TypeOracle is \emph{not} a learned component.  It is a purely
+symbolic rule engine that extracts type information from the KG's
+ontology schema.  Its two gates enforce:
+
+\begin{enumerate}
+  \item \textbf{Local consistency} (range gate): the tail entity's type
+    must be compatible with the relation's declared range.
+  \item \textbf{Global consistency} (type gate): the terminal entity's
+    type must be compatible with the expected answer types.
+\end{enumerate}
+
+The conservative default (admit when types are unknown) means the
+oracle never over-filters when information is missing.  Its effectiveness
+depends on the quality and coverage of the ontology schema.
+
+\subsection{Limitations}
+
+\begin{itemize}
+  \item \textbf{Ontology coverage.}  The TypeOracle's hand-curated
+    schema covers $\sim$38 Freebase relations.  Auto-mining from data
+    triples extends coverage, but mined ranges may be noisy.
+  \item \textbf{Evaluation metric.}  The standard Hits@1 metric uses
+    substring matching ($\texttt{answer} \in \texttt{prediction}$),
+    which is lenient.  Exact-match evaluation would give lower but more
+    honest numbers.
+  \item \textbf{v2 latency.}  Multiple forward passes make v2 slower
+    than the single-pass baseline, despite smaller tries.
+\end{itemize}
+
+%======================================================================
+\section*{Acknowledgements}
+%======================================================================
+
+This work builds on the GCR framework (Luo et al., 2025) and the DoG
+decoding paradigm (Lin et al., 2025).
+
+\end{document}

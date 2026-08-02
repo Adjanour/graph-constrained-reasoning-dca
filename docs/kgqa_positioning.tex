@@ -1,0 +1,367 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue}
+
+\title{From KGQA to Constrained Generation:\\
+A Positioning of DCA-Trie in the Knowledge Graph\\
+Question Answering Landscape}
+\author{Bernard Katamanso}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+%======================================================================
+\section{What Is KGQA?}
+%======================================================================
+
+Knowledge Graph Question Answering (KGQA) is the task of answering a
+natural language question $q$ using a structured knowledge graph
+$\G = (V, E, \mathcal{R})$, where $V$ is a set of entities, $E \subseteq
+V \times \mathcal{R} \times V$ is a set of labeled edges, and
+$\mathcal{R}$ is a set of relation types.
+
+Formally, given a question $q$ and a knowledge graph $\G$, the goal is
+to produce an answer $a \in V$ (or a set of answers) such that $a$ is
+the correct response to $q$ according to the information in $\G$.
+
+\subsection{Why It Matters}
+
+KGQA sits at the intersection of three converging trends:
+
+\begin{enumerate}
+  \item \textbf{Structured knowledge.}  KGs like Freebase, Wikidata, and
+    YAGO encode billions of facts as $(h, r, t)$ triples.  They are
+    auditable, updatable, and free of the parametric knowledge drift
+    that plagues LLMs.
+
+  \item \textbf{Natural language interface.}  Users want to query
+    structured data in natural language, not SPARQL.  KGQA bridges this
+    gap.
+
+  \item \textbf{Reasoning over facts.}  Unlike simple fact lookup, KGQA
+    requires \emph{multi-hop reasoning}: following a path through the
+    graph to arrive at an answer that is not directly stated in the
+    question.
+\end{enumerate}
+
+%======================================================================
+\section{The KGQA Taxonomy}
+%======================================================================
+
+KGQA methods fall into four paradigms.  Each makes different assumptions
+about how to bridge language and graph structure.
+
+\subsection{Semantic Parsing}
+
+Convert the question into a formal query (SPARQL, logical form) and
+execute it against the KG.
+
+\[
+  q \;\longrightarrow\; \text{SPARQL}(q) \;\longrightarrow\;
+  \text{execute}(\text{SPARQL}(q), \G) \;\longrightarrow\; a
+\]
+
+\textbf{Strengths:} precise, interpretable, verifiable.\\
+\textbf{Weaknesses:} brittle to paraphrase, requires annotated
+logical forms, struggles with ambiguous questions.
+
+\subsection{Information Retrieval}
+
+Retrieve a subgraph $\G_q \subseteq \G$ relevant to $q$, then answer
+from the subgraph.
+
+\[
+  q \;\longrightarrow\; \text{retrieve}(q, \G) = \G_q
+  \;\longrightarrow\; \text{reason}(\G_q) \;\longrightarrow\; a
+\]
+
+\textbf{Strengths:} scalable, handles large KGs.\\
+\textbf{Weaknesses:} retrieval quality is the bottleneck; errors in
+$\G_q$ propagate to the answer.
+
+\subsection{Embedding-Based}
+
+Learn vector representations of entities and relations, then answer by
+vector similarity or geometric reasoning.
+
+\[
+  q \;\longrightarrow\; \text{encode}(q) = \mathbf{q}
+  \;\longrightarrow\; \arg\max_{a \in V}\;
+  \text{sim}(\mathbf{q}, \mathbf{a}) \;\longrightarrow\; a
+\]
+
+\textbf{Strengths:} smooth generalization, handles unseen entities.\\
+\textbf{Weaknesses:} opaque reasoning, requires large-scale training,
+struggles with multi-hop paths.
+
+\subsection{Generation-Based (LLM + KG)}
+
+Use a large language model to generate a reasoning path, constrained by
+KG structure.
+
+\[
+  q,\; \G \;\longrightarrow\;
+  \text{LLM}(q, \G_q) = (v_0, e_1, v_1, \ldots, e_L, v_L)
+  \;\longrightarrow\; v_L = a
+\]
+
+\textbf{Strengths:} interpretable paths, natural language output,
+leveraging LLM world knowledge.\\
+\textbf{Weaknesses:} hallucination risk, computationally expensive.
+
+\paragraph{This is where DCA-Trie sits.}  We extend this paradigm by
+constraining the LLM's generation at \emph{every token} using a trie
+derived from the KG, augmented with semantic type gates.
+
+%======================================================================
+\section{The Hallucination Problem}
+%======================================================================
+
+The fundamental challenge in generation-based KGQA is
+\textbf{hallucination}: the LLM generates plausible-sounding entities
+or relations that do not exist in the KG.
+
+Consider:
+\begin{quote}
+  \textbf{Q:} ``Who directed Inception?''\\
+  \textbf{LLM (unconstrained):} ``Inception was directed by
+  Christopher Nolan, who also made The Dark Knight.''
+\end{quote}
+
+The second clause is factually correct but not grounded in the KG
+subgraph for this question.  In a constrained setting, the model should
+only output paths that exist in $\G$.
+
+\subsection{Levels of Constraint}
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+  Level & Mechanism & What it prevents \\
+\midrule
+  Token-level  & Trie constrains next token     & Hallucinated tokens \\
+  Topological  & Edges must exist in $\G$        & Hallucinated edges \\
+  Semantic     & Type gates enforce ontology     & Type-incoherent paths \\
+  Query-aware  & Answer types from question      & Irrelevant answers \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+GCR (rmanluo et al.\ 2025) operates at levels 1--2.  DCA-Trie adds
+levels 3--4.
+
+%======================================================================
+\section{Why Graph-Constrained Reasoning?}
+%======================================================================
+
+The key insight is that KGQA is \emph{not} an open-ended generation
+task.  The answer must be a real entity connected to the question entity
+via a chain of real edges.  This structural constraint can be exploited
+at decode time.
+
+\subsection{The GCR Framework}
+
+Graph-Constrained Reasoning (GCR)~\cite{gcr2025} introduced the idea of
+encoding all valid paths from the KG into a trie, then using
+\texttt{prefix\_allowed\_tokens\_fn} to restrict the LLM's vocabulary
+at every decode step.
+
+\paragraph{Baseline (unconstrained).}  The LLM generates freely:
+\[
+  P(v_L \mid q) = \prod_{l=1}^{L} P(v_l \mid v_{<l}, q).
+\]
+
+\paragraph{GCR (constrained).}  At each step $l$, the valid next tokens
+are restricted to those that appear in some path prefix in the trie:
+\[
+  P(v_L \mid q, \mathcal{T}) = \prod_{l=1}^{L}
+  P(v_l \mid v_{<l}, q,\; v_l \in \mathcal{T}(v_{<l})).
+\]
+where $\mathcal{T}(p)$ returns the set of valid next tokens given prefix
+$p$.
+
+This ensures every generated path is a real path in $\G$.
+
+\subsection{The DCA-Trie Extension}
+
+DCA-Trie adds semantic constraints on top of the topological constraint.
+Before inserting paths into the trie, we filter by type compatibility:
+
+\[
+  \mathcal{T}_{\text{filtered}} = \{(h, r, t) \in \mathcal{T} \mid
+  \text{range\_gate}(r, t) \;\land\;
+  \text{type\_gate}(t, A, l, L)\}
+\]
+
+This is a \emph{pre-processing} step that reduces the trie size without
+changing the decoding algorithm.
+
+%======================================================================
+\section{Complexity Analysis}
+%======================================================================
+
+\subsection{The Path Explosion Problem}
+
+For a KG with average degree $d$ and path length $L$, the number of
+possible paths from a query entity is:
+\[
+  |\text{paths}| = O(d^L).
+\]
+
+For WebQSP ($d \approx 20$, $L = 2$): $d^L \approx 400$ paths per
+entity.  With 1,628 questions, this is manageable.
+
+For CWQ ($d \approx 20$, $L = 4$): $d^L \approx 160{,}000$ paths.
+This is the path explosion problem.
+
+\subsection{How Each Method Addresses It}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lcc@{}}
+\toprule
+  Method & Trie size & Per-hop cost \\
+\midrule
+  GCR baseline   & $O(d^L)$ static   & $O(1)$ per token \\
+  GCR + filtering & $O(d^L)$ smaller  & $O(1)$ per token \\
+  DCA v1 (static) & $O(d^L)$ filtered & $O(1)$ per token \\
+  DCA v2 (dynamic) & $O(d)$ per hop   & $O(1)$ per token \\
+  DoG             & $O(d)$ per hop    & $O(1)$ per token \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The key advantage of dynamic methods (v2, DoG) is that the trie size is
+independent of $L$: at each hop, we only enumerate 1-hop neighbors,
+keeping the trie to $O(d)$ entries.
+
+%======================================================================
+\section{Benchmarks and Evaluation}
+%======================================================================
+
+\subsection{Standard Benchmarks}
+
+\begin{itemize}
+  \item \textbf{WebQSP}~\cite{webqsp}: 5,810 questions, 2--3 hop paths,
+    Freebase subgraphs.  Simpler, shorter paths.
+  \item \textbf{ComplexWebQuestions (CWQ)}~\cite{cwq}: 27,000+ questions,
+    2--5 hop paths, more complex compositions.
+  \item \textbf{MetaQA}~\cite{metaqa}: Movies domain, 1--3 hop questions.
+  \item \textbf{QALD-9}: Cross-lingual, SPARQL-based.
+\end{itemize}
+
+\subsection{Our Evaluation}
+
+\begin{center}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+  Method & WebQSP ($N$=100) & CWQ ($N$=500) & Path reduction \\
+\midrule
+  GCR baseline      & 89.0\% & 53.2\% & --- \\
+  DCA v1 (filtered) & 88.0\% & ---    & 13.3\% \\
+  DCA v2 (dynamic)  & 54.9\% & 32.2\% & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%======================================================================
+\section{Positioning DCA-Trie}
+%======================================================================
+
+\subsection{Relation to Prior Work}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+  Work & Constraint type & Semantic filtering \\
+\midrule
+  GCR (2025)           & Topological (trie)      & No \\
+  DoG (2025)           & Topological (dynamic)   & No \\
+  KBQA-o1 (2025)       & Search-based (MCTS)     & No \\
+  ORT (2024)           & Label-level reasoning   & Ontology-level \\
+  \textbf{DCA-Trie}    & \textbf{Topological + semantic} & \textbf{Yes} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Contributions}
+
+\begin{enumerate}
+  \item \textbf{TypeOracle.}  A purely symbolic semantic gate using
+    Freebase ontology (entity types, relation ranges).  No embeddings,
+    no learned parameters.
+
+  \item \textbf{Static filtering (v1).}  Pre-filter the trie before
+    decoding.  Simple, effective for short paths.
+
+  \item \textbf{Dynamic filtering (v2).}  Per-hop trie expansion with
+    TypeOracle gates, following DoG's iterative architecture.
+
+  \item \textbf{Empirical analysis.}  Systematic evaluation showing
+    that filtering reduces paths by 13\% at 1pp accuracy cost (WebQSP),
+    but the cost-benefit tradeoff degrades on deeper graphs (CWQ).
+\end{enumerate}
+
+\subsection{Limitations and Future Directions}
+
+\begin{itemize}
+  \item The Freebase ontology is broad---most entities have multiple
+    types, so type gates are permissive.  Finer-grained ontologies
+    (e.g., domain-specific) would improve pruning.
+
+  \item Reasoning context (D4) is underexploited.  The generated relation
+    itself constrains the next entity; this could be used for on-the-fly
+    filtering without waiting for the type oracle.
+
+  \item Multi-hop questions ($L \geq 3$) remain challenging for all
+    methods.  The compounding error problem in iterative decoding is
+    not yet solved.
+\end{itemize}
+
+%======================================================================
+% Bibliography
+%======================================================================
+\begin{thebibliography}{1}
+
+\bibitem{gcr2025}
+  Luo et al., ``Graph-Constrained Reasoning: Faithful Reasoning on
+  Knowledge Graphs with Large Language Models,'' \emph{ICML}, 2025.
+
+\bibitem{dog2025}
+  Lee et al., ``Decoding on Graph: Augmenting LLM Reasoning with
+  Knowledge Graph Structured Search,'' \emph{ACL}, 2025.
+  arXiv:2410.18415.
+
+\bibitem{webqsp}
+  Berant et al., ``Semantic Parsing on Freebase from Question-Answer
+  Pairs,'' \emph{EMNLP}, 2013.
+
+\bibitem{cwq}
+  Talmor and Berant, ``The Web as a Knowledge-Base for Answering
+  Complex Questions,'' \emph{NAACL}, 2018.
+
+\bibitem{metaqa}
+  Liang et al., ``Variational Reasoning for Question Answering with
+  Knowledge Graph,'' \emph{AAAI}, 2018.
+
+\bibitem{kbqa_o1}
+  ``KBQA-o1: Agentic Knowledge Base Question Answering with Monte Carlo
+  Tree Search,'' \emph{ICML}, 2025.
+
+\bibitem{ort}
+  Liu et al., ``ORT: Ontology-Guided Reverse Thinking for Knowledge
+  Graph Question Answering,'' \emph{ACL}, 2025.
+
+\end{thebibliography}
+
+\end{document}

@@ -23,7 +23,7 @@ The core unit is the **triple**: `(Subject, Predicate, Object)`.
 **Why not just a relational database?**
 
 | Dimension | Knowledge Graph | Relational Database |
-|-----------|-----------------|-------------------|
+| ----------- | ----------------- | ------------------- |
 | **Relationships** | First-class citizen, directly modeled | Foreign key joins |
 | **Multi-hop query** | Native graph traversal | k JOINs, exponential cost |
 | **Schema** | Flexible, can evolve | Rigid, needs migrations |
@@ -33,7 +33,7 @@ The core unit is the **triple**: `(Subject, Predicate, Object)`.
 **Major Knowledge Graphs:**
 
 | KG | Scale | Domain | Access |
-|----|-------|--------|--------|
+| ---- | ------- | -------- | -------- |
 | **Wikidata** | ~100M entities, ~1.5B statements | General | SPARQL endpoint, dump |
 | **Freebase** (deprecated) | ~50M entities | General | Migrated to Wikidata |
 | **DBpedia** | ~40M entities | General (from Wikipedia) | SPARQL, dumps |
@@ -82,7 +82,7 @@ Edge: Elvis_Presley -[:STARRED_IN]-> Blue_Hawaii
 ### Quick Comparison
 
 | Criterion | RDF | LPG |
-|-----------|-----|-----|
+| ----------- | ----- | ----- |
 | **Standardisation** | W3C standard | De facto (Cypher, GQL) |
 | **Properties on edges** | Reification needed | Native |
 | **Schema/ontology** | RDFS, OWL (built-in) | Application-level |
@@ -119,6 +119,7 @@ KGs operate under OWA: if a triple is *not present*, it does *not mean false*. I
 ### Relevance to DCA-Trie
 
 In Freebase, relation range declarations already exist in the KG:
+
 - `people.person.nationality` has range = {Country}
 - `film.director` has range = {Person}
 
@@ -141,7 +142,7 @@ Answer: Grammy Award
 ### Benchmarks
 
 | Dataset | Questions | Hops | Source KG |
-|---------|-----------|------|-----------|
+| --------- | ----------- | ------ | ----------- |
 | **WebQSP** | 4,737 | 1-2 | Freebase |
 | **ComplexWebQuestions (CWQ)** | 34,689 | 2-4 | Freebase |
 | **LC-QuAD 2.0** | 24,907 | Multiple | Wikidata |
@@ -151,6 +152,7 @@ Answer: Grammy Award
 The core idea: **intercept the token selection process and physically prevent invalid tokens from being chosen.**
 
 At each generation step:
+
 1. Compute what tokens are **valid** given the KG and what's been generated so far
 2. Set the probability of all invalid tokens to **exactly zero** (logit masking)
 3. Let the LLM pick from only the valid set
@@ -164,7 +166,7 @@ This guarantees the output is always structurally faithful to the KG.
 ### The GCR/DCA-Trie Approach
 
 | System | Approach | Key Idea |
-|--------|----------|----------|
+| -------- | ---------- | ---------- |
 | **GCR** (Luo et al., 2025) | Static KG trie, logit masking | 100% structural faithfulness |
 | **DoG** (Li et al., 2025) | Step-wise trie expansion | Dynamic, entity-committed expansion |
 | **DCA-Trie** | Ontology-aware pruning | Uses KG type + range to prune irrelevant paths |

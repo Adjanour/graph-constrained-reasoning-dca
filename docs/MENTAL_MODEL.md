@@ -307,3 +307,231 @@ Everything else — entity linking, BFS, beam search, LLM — stays the same.
 
 This isolation means: **any improvement in accuracy or efficiency
 is attributable to the oracle design, not to model changes.**
+
+---
+
+## Common Confusions
+
+### "Isn't the trie just a lookup table?"
+
+Not exactly. A lookup table maps keys to values. A trie maps **prefixes to valid continuations**. The key difference is that a trie can efficiently answer "what are all valid next tokens given this partial sequence?" — which is exactly what you need at each decoding step.
+
+A lookup table would need to store every complete path. A trie stores the structure, so shared prefixes are only stored once. For 24,000 paths with average length 20, that's 480,000 entries in a table vs ~50,000 nodes in a trie.
+
+### "Why not just use the shortest path?"
+
+Because the shortest path isn't always the right path. The question "What is the nationality of the director of Blue Hawaii?" requires a 2-hop path. But there might be multiple 2-hop paths, and the shortest path might not be the one that answers the question.
+
+Also, the system generates **multiple paths** with beam search. The LLM picks the best one from the valid set. Using only the shortest path would remove the LLM's ability to choose.
+
+### "Does the oracle guarantee the answer is correct?"
+
+No. The oracle guarantees the answer is **structurally valid** — it exists in the KG. But the LLM still needs to choose the *right* path from among all valid paths.
+
+The oracle reduces the search space from 24,000 paths to ~20,000 paths. The LLM then picks the best one from the reduced set. The guarantee is: whatever it picks, it's a real KG path. Not that it's the correct answer.
+
+### "Why does the cosine similarity approach fail?"
+
+The cosine approach uses `cos(E(path), E(question)) >= τ` to decide if a path is relevant. Two problems:
+
+1. **Threshold collapse**: At τ=0.25, 84% of questions produced empty tries — all paths were rejected. The threshold was too aggressive. But lowering it reduces filtering power. There's no good middle ground.
+
+2. **Wrong signal**: Cosine similarity measures text similarity, not semantic relevance. A path like "Blue Hawaii → film.film.genre → Comedy" is textually similar to the question but doesn't answer it.
+
+The symbolic approach avoids both problems: no threshold to tune, and the signal (entity types) directly answers "is this path heading in the right direction?"
+
+### "What's the difference between v1 and v2?"
+
+**v1 (Static)**: Build the trie once from all filtered paths, then run constrained decoding. Simple, fast, one-shot.
+
+**v2 (Dynamic)**: At each decoding step, expand the trie with new valid paths based on what's been generated so far. More complex, potentially more accurate, but slower.
+
+v1 is the primary approach used in experiments. v2 is experimental.
+
+### "Why group-beam search instead of standard beam search?"
+
+Standard beam search can suffer from **beam collapse** — all k beams converge to the same high-probability sequence. For KGQA, this means all 10 beams might generate the same path, wasting compute.
+
+Group-beam search divides beams into groups and adds a **diversity penalty** — beams in different groups are penalized for being similar. This forces exploration of different paths, which is critical when multiple valid paths exist.
+
+---
+
+## Design Rationale
+
+### Why two oracle gates instead of one?
+
+The two gates catch **different failure modes**:
+
+**Type gate** (terminal hop): "Does the final entity have the right type for what the question asks?"
+- Catches: paths that wander to random entities of the wrong type
+- Example: "Who directed Blue Hawaii?" → path ends at a Film entity → blocked
+- Does ~73% of the pruning work (10.6% vs 3.8%)
+
+**Range gate** (every hop): "Does this relation's declared range match the entity it connects to?"
+- Catches: nonsensical intermediate steps where a relation is applied to the wrong type
+- Example: `film.film.country → Elvis_Presley` → blocked (Elvis is a Person, not a Country)
+- Does ~27% of the pruning work
+
+They're complementary. A path can pass the range gate (all intermediate steps make sense) but fail the type gate (ends at the wrong type). Or vice versa.
+
+### Why only check types at the terminal hop?
+
+At intermediate hops, the entity is a **waypoint**, not the answer. You're passing through it to get somewhere else. Its type doesn't matter for the final answer.
+
+Example: "What is the nationality of the director of Blue Hawaii?"
+- Hop 1: Blue Hawaii → directed_by → Norman Taurog (Person) — OK, he's a waypoint
+- Hop 2: Norman Taurog → nationality → United States (Country) — this is the answer
+
+At hop 1, we don't care that Norman Taurog is a Person. We care that at hop 2, the answer is a Country (matching "nationality").
+
+If we checked types at every hop, we'd incorrectly block valid paths where intermediate entities happen to have "wrong" types.
+
+### Why conservative fallback (admit when info is missing)?
+
+Consider the alternative: **reject when info is missing**.
+
+- If an entity has no declared types → reject it
+- If a relation has no declared range → reject paths using it
+
+This sounds safer. But in practice:
+- Many entities in Freebase have incomplete type information
+- Many relations have no explicit range declaration
+- Rejecting on missing info would **kill recall** — you'd lose correct answers because the KG metadata is incomplete
+
+The conservative approach (admit when info is missing) bounds the false negative rate at ~3%. The aggressive approach (reject on missing info) would have FNR > 20%.
+
+**The design tradeoff:** We accept a few extra irrelevant paths (lower precision) to ensure we never lose the correct path (high recall). This is the right tradeoff because the LLM can handle some noise in the path set, but it can't recover from a missing correct path.
+
+### Why not learn the oracle?
+
+You could train a model to predict whether each path is relevant. But:
+
+1. **You need training data** — gold-standard labels for "is this path relevant?" are expensive to annotate
+2. **You need a GPU** — inference on the encoder adds latency and cost
+3. **You need threshold tuning** — the model outputs a score, you need to decide where to cut
+4. **It's non-deterministic** — float noise means slightly different results each run
+5. **It doesn't generalize** — a model trained on WebQSP might not work on CWQ
+
+The symbolic oracle:
+1. Uses metadata already in the KG — no annotation needed
+2. Runs on CPU — O(1) set lookups
+3. Has no threshold — binary decision
+4. Is deterministic — same input, same output
+5. Generalizes — the KG schema is universal
+
+---
+
+## Deep-Dive Questions
+
+### "Walk me through what happens for one question."
+
+**Question:** "What is the nationality of the director of Blue Hawaii?"
+
+**Step 1: Entity Linking**
+The system identifies "Blue Hawaii" as a known Freebase entity.
+
+**Step 2: DFS Path Enumeration**
+Starting from Blue Hawaii, enumerate all paths up to 2 hops:
+```
+Blue Hawaii → film.film.directed_by → Norman Taurog
+Blue Hawaii → film.film.starring → Elvis Presley
+Blue Hawaii → film.film.country → United States
+Blue Hawaii → film.film.language → English
+Norman Taurog → people.person.nationality → United States
+Norman Taurog → people.person.place_of_birth → New York City
+Elvis Presley → people.person.nationality → United States
+... (hundreds more)
+```
+
+**Step 3: TypeOracle Filtering**
+- Question word "nationality" → answer types = {Person, Location, Country}
+- **Range gate**: Check each intermediate hop
+  - `film.film.directed_by → Norman Taurog`: range is {Person}, Norman is Person ✓
+  - `film.film.country → United States`: range is {Country}, US is Country ✓
+  - `film.film.starring → Elvis Presley`: range is {Person}, Elvis is Person ✓
+- **Type gate**: Check terminal entity type
+  - Terminal entity = United States, types = {Country}
+  - Country ∩ {Person, Location, Country} ≠ ∅ ✓ → admitted
+  - Terminal entity = Elvis Presley, types = {Person}
+  - Person ∩ {Person, Location, Country} ≠ ∅ ✓ → admitted
+  - Terminal entity = English, types = {Human Language}
+  - Human Language ∩ {Person, Location, Country} = ∅ ✗ → **blocked**
+
+**Step 4: Trie Construction**
+Build a MarisaTrie from the filtered paths. Each path becomes a token sequence:
+```
+<PATH> Blue_Hawaii -> film.film.directed_by -> Norman_Taurog ->
+       people.person.nationality -> United_States </PATH> <eos>
+```
+
+**Step 5: Constrained Decoding**
+The LLM generates freely until it emits `<PATH>`. Then:
+```
+Step 1: LLM sees question, starts generating
+Step 2: LLM emits <PATH> → constrained mode activates
+Step 3: trie.get("<PATH>") → returns ["Blue_Hawaii"]
+Step 4: LLM picks "Blue_Hawaii" (only option)
+Step 5: trie.get("<PATH> Blue_Hawaii") → returns ["film.film.directed_by", "film.film.starring", ...]
+Step 6: LLM picks "film.film.directed_by" (semantic choice)
+Step 7: trie.get("... directed_by") → returns ["Norman_Taurog"]
+Step 8: LLM picks "Norman_Taurog"
+Step 9: trie.get("... Norman_Taurog") → returns ["people.person.nationality", ...]
+Step 10: LLM picks "people.person.nationality"
+Step 11: trie.get("... nationality") → returns ["United_States"]
+Step 12: LLM picks "United_States"
+Step 13: LLM emits </PATH> → free generation resumes
+Step 14: LLM writes answer: "United States"
+```
+
+**Step 6: Answer Extraction**
+Parse the output, extract "United States" as the predicted answer.
+
+### "Why doesn't the oracle just pick the right path directly?"
+
+Because the oracle doesn't "know" which path answers the question. It only knows which paths are **heading in the right direction** (right entity types, right relation ranges). The LLM is the one that knows which relation is semantically relevant to the question.
+
+The oracle is a **structural filter**, not a semantic reasoner. It removes paths that are *structurally impossible* (wrong types, wrong ranges) but keeps paths that are *structurally possible but semantically irrelevant*. The LLM handles the semantic selection.
+
+This is a deliberate division of labor:
+- **Oracle**: Handles what it's good at (structural validity) — fast, deterministic, no GPU
+- **LLM**: Handles what it's good at (semantic understanding) — slow, expensive, but necessary
+
+### "What happens if the oracle is wrong?"
+
+The oracle is designed to be **conservative** — it errs on the side of keeping paths, not rejecting them.
+
+If the oracle rejects a path that should have been kept (false negative):
+- The LLM can't choose that path (it's not in the trie)
+- The correct answer might be lost
+- This is measured by the **FNR** (False Negative Rate)
+
+Empirically, FNR is ~3% — the oracle incorrectly blocks about 3 out of every 100 gold paths. This is the cost of the conservative design. An aggressive design would have higher FNR but more pruning.
+
+If the oracle keeps a path that should have been rejected (false positive):
+- The LLM has one more irrelevant path to choose from
+- This adds noise but doesn't lose the correct answer
+- This is measured by **1 - SIR** (the fraction of paths that pass through)
+
+The design tradeoff: minimize FNR (don't lose correct paths) at the cost of some extra false positives (keep some irrelevant paths). The LLM can handle noise; it can't handle missing information.
+
+### "Could this work without the LLM?"
+
+Yes, partially. If you know the question entities and the answer type, you could:
+1. DFS from question entities
+2. Apply the type oracle to filter paths
+3. Return all terminal entities that match the answer type
+
+This is essentially what `direct_answer()` does in `predict_final_answer.py` when no model is available. It works for simple questions but fails for complex ones that require semantic understanding of which relation to follow.
+
+The LLM adds the semantic reasoning capability — it can understand that "nationality" implies following the `people.person.nationality` relation, not `people.person.profession` or `people.person.gender`.
+
+### "What's the relationship between SIR and decoding speed?"
+
+Smaller trie → fewer valid tokens at each step → faster `prefix_allowed_tokens_fn` evaluation.
+
+With group-beam search (k=10), each decoding step expands 10 beams. Each beam calls `trie.get()`. A 14.5% reduction in trie size means:
+- 14.5% fewer tokens to consider per beam
+- 14.5% less memory for the trie structure
+- Measurable speedup in decoding
+
+But the primary benefit isn't speed — it's **accuracy**. Fewer irrelevant paths means the LLM has an easier semantic selection problem.

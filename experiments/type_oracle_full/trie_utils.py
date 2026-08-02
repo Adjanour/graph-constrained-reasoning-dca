@@ -1,11 +1,15 @@
 """
 trie_utils.py — MarisaTrie builders for DCA-Trie experiments.
 
-Provides three constructors:
+Provides four constructors:
 - ``build_unfiltered_trie`` → all DFS paths (GCR baseline)
 - ``build_filtered_trie``   → TypeOracle-gated paths (DCA v1 static)
 - ``build_trie_from_strings`` → from raw path strings (DCA v2 dynamic)
+- ``build_dict_trie`` → Python dict trie for per-beam dynamic construction (DoG-style)
 """
+
+from functools import reduce
+from typing import Dict, List, Optional, Set
 
 import src.utils as graph_utils
 from src.trie import MarisaTrie
@@ -77,3 +81,73 @@ def build_trie_from_strings(tokenizer, path_strings):
     tokenized = tokenizer(wrapped, padding=False, add_special_tokens=False).input_ids
     tokenized = [ids + [tokenizer.eos_token_id] for ids in tokenized]
     return MarisaTrie(tokenized, max_token_id=len(tokenizer) + 1)
+
+
+def build_trie_from_token_ids(tokenizer, token_ids):
+    """Build a MarisaTrie from pre-tokenized ID sequences (with EOS already appended).
+
+    This is the P4 optimization: tokenize once, build tries from the same
+    token IDs across baseline/v1/v2.
+    """
+    if not token_ids:
+        return None
+    return MarisaTrie(token_ids, max_token_id=len(tokenizer) + 1)
+
+
+def build_dict_trie(tokenizer, path_strings: List[str]) -> Optional[Dict[int, dict]]:
+    """
+    Build a Python dict trie from path strings (DoG-style dynamic construction).
+
+    This is used for per-beam trie construction in v2 iterative decoding.
+    The trie maps token IDs to child dicts, enabling O(1) lookup per token.
+
+    Each complete path is added to the trie. The prefix lookup traverses
+    the trie with the prefix and returns valid next tokens.
+
+    Parameters
+    ----------
+    tokenizer : tokenizer
+        HuggingFace tokenizer.
+    path_strings : list of str
+        Path strings like "entity1 -> relation -> entity2".
+
+    Returns
+    -------
+    dict or None
+        Python dict trie, or None if path_strings is empty.
+    """
+    if not path_strings:
+        return None
+
+    wrapped = [f"{PATH_START}{s}{PATH_END}" for s in path_strings]
+    tokenized = tokenizer(wrapped, padding=False, add_special_tokens=False).input_ids
+    tokenized = [ids + [tokenizer.eos_token_id] for ids in tokenized]
+
+    trie = {}
+    for token_seq in tokenized:
+        node = trie
+        for token in token_seq:
+            if token not in node:
+                node[token] = {}
+            node = node[token]
+    return trie
+
+
+def dict_trie_get(trie: Dict[int, dict], prefix: List[int]) -> List[int]:
+    """
+    Get valid next tokens from a Python dict trie given a prefix.
+
+    Parameters
+    ----------
+    trie : dict
+        Python dict trie.
+    prefix : list of int
+        Token IDs so far.
+
+    Returns
+    -------
+    list of int
+        Valid next token IDs.
+    """
+    node = reduce(lambda d, k: d.get(k, {}), prefix, trie)
+    return list(node.keys())

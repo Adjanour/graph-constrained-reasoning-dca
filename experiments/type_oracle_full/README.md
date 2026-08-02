@@ -5,14 +5,16 @@ End-to-end experiment comparing GCR baseline vs DCA-Trie v1 (static) vs DCA-Trie
 ## Quick Start
 
 ```bash
-# Run everything: setup + both datasets + all 3 conditions, 50 samples each
-bash experiments/type_oracle_full/run.sh
+# Run all conditions on WebQSP, 50 samples
+uv run python experiments/type_oracle_full/main.py --method all --max-samples 50
+
+# Full ablation (baseline + v1 + v2 + v2-nogates) with metrics
+bash experiments/type_oracle_full/run_ablation.sh --max-samples 300
 ```
 
 ## What It Does
 
-1. **Setup** (`setup.sh`): installs dependencies, optional flash-attn wheel
-2. **Run** (`run.py`): runs all three conditions on both WebQSP and CWQ
+Runs controlled comparisons of constrained decoding strategies on knowledge graph QA.
 
 ### Conditions
 
@@ -21,48 +23,21 @@ bash experiments/type_oracle_full/run.sh
 | `GCR_Baseline` | Unfiltered DFS paths, standard constrained decoding |
 | `DCA_v1_Static` | TypeOracle pre-filters all paths, then builds trie |
 | `DCA_v2_Dynamic` | Iterative hop-by-hop trie expansion with symbolic gates |
+| `DCA_v2_NoGates` | v2 with type/range gates disabled (ablation proxy for DoG) |
 
 ### Output
 
-Results saved to `results/final_experiment/<timestamp>/`:
+Results saved to `results/<timestamp>/`:
 
 ```
 <timestamp>/
   config.json
   summary.json
-  RoG-webqsp/
+  <dataset>/
     predictions_GCR_Baseline.jsonl
     predictions_DCA_v1_Static.jsonl
     predictions_DCA_v2_Dynamic.jsonl
-  RoG-cwq/
-    predictions_GCR_Baseline.jsonl
-    predictions_DCA_v1_Static.jsonl
-    predictions_DCA_v2_Dynamic.jsonl
-```
-
-## Options
-
-```bash
-# Both datasets, all methods, 50 samples (default)
-bash experiments/type_oracle_full/run.sh
-
-# One dataset only
-bash experiments/type_oracle_full/run.sh --datasets RoG-webqsp
-
-# One method only
-bash experiments/type_oracle_full/run.sh --method v1
-
-# Full test set (no subsampling)
-bash experiments/type_oracle_full/run.sh --full
-
-# Custom sample count
-bash experiments/type_oracle_full/run.sh --max-samples 10
-
-# Fresh start (ignore checkpoints)
-bash experiments/type_oracle_full/run.sh --force-rerun
-
-# Custom output directory
-bash experiments/type_oracle_full/run.sh --output-dir /path/to/results
+    predictions_DCA_v2_NoGates.jsonl   # if --method ablation
 ```
 
 ## CLI Arguments
@@ -73,11 +48,24 @@ bash experiments/type_oracle_full/run.sh --output-dir /path/to/results
 | `--datasets` | `RoG-webqsp RoG-cwq` | Datasets to run |
 | `--split` | `test` | Dataset split |
 | `--max-samples` | `50` | Questions per dataset |
-| `--method` | `all` | `baseline`, `v1`, `v2`, or `all` |
+| `--method` | `all` | `baseline`, `v1`, `v2`, `v2-nogates`, `all`, or `ablation` |
 | `--index-len` | `2` | Max hops |
-| `-k` | `10` | Beam width |
-| `--gen-mode` | `group-beam` | `greedy`, `group-beam`, or `beam` |
+| `--beam-size` | `5` | Beam width |
+| `--seed` | `42` | Random seed |
+| `--trace` | `false` | Print per-sample trace (7-step format) |
+| `--collect-metrics` | `false` | Collect BUR/SIR/volatility/RV metrics |
 | `--force-rerun` | `false` | Ignore existing checkpoints |
+| `--sample-timeout` | `120` | Per-question timeout (seconds) |
+
+## Ablation Study
+
+```bash
+# Full ablation: all 4 conditions, metrics collection, 300 samples
+bash experiments/type_oracle_full/run_ablation.sh --max-samples 300
+
+# Custom seed for reproducibility
+bash experiments/type_oracle_full/run_ablation.sh --seed 123 --max-samples 500
+```
 
 ## Checkpoint/Resume
 
@@ -90,14 +78,14 @@ Run one dataset at a time to avoid losing progress if interrupted.
 Both runs share the same output directory so results are combined.
 
 ```bash
-# Step 1: WebQSP (~1600 questions, ~3 methods)
-bash experiments/type_oracle_full/run.sh \
-  --datasets RoG-webqsp --full \
+# Step 1: WebQSP (~1600 questions)
+uv run python experiments/type_oracle_full/main.py \
+  --method all --datasets RoG-webqsp --full \
   --output-dir results/final_experiment/run1
 
-# Step 2: CWQ (~3500 questions, ~3 methods)
-bash experiments/type_oracle_full/run.sh \
-  --datasets RoG-cwq --full \
+# Step 2: CWQ (~3500 questions)
+uv run python experiments/type_oracle_full/main.py \
+  --method all --datasets RoG-cwq --full \
   --output-dir results/final_experiment/run1
 ```
 
@@ -111,6 +99,6 @@ bash scripts/run_vast.sh --datasets RoG-cwq    --output-dir results/final_experi
 ## Requirements
 
 - GPU with 16GB+ VRAM (A100 recommended for flash-attn)
-- Python 3.10+
+- Python 3.11+
 - `transformers>=4.44,<5.0` (pinned — 5.x has breaking generation API changes)
-- See `setup.sh` for dependencies
+- See `scripts/setup-env.sh` for dependencies

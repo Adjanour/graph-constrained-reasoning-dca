@@ -1,0 +1,244 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue}
+
+\newcommand{\G}{\mathcal{G}}
+\newcommand{\range}{\mathrm{range}}
+\newcommand{\Types}{\mathrm{Types}}
+
+\title{Beyond Traditional KGQA:\\What LLMs Are For, and Why the\\
+Field Is Genuinely Hard}
+\author{Bernard Katamanso}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+%======================================================================
+\section{What Do We Actually Want LLMs For?}
+%======================================================================
+
+The common failure mode is to treat the LLM as a \emph{knowledge
+store}.  It is not: parametric memory is frozen at training time,
+unverifiable, and hallucinates precisely where facts are
+domain-specific.  The useful reframing is a \emph{division of labor}
+between a linguistic system and a structured system.
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+  Role & Performed by & Why the LLM \\
+\midrule
+  \textbf{Comprehend} & LLM & Turn noisy natural language into intent,
+    entity mentions, and constraints \\
+  \textbf{Compose} & LLM + symbolic layer & Plan/execute multi-hop reasoning:
+    the LLM \emph{proposes}, structure \emph{disposes} \\
+  \textbf{Communicate} & LLM & Produce the answer plus explanation in
+    natural language \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The knowledge graph is the ground truth; the LLM is the \emph{linguistic
+front-end} and \emph{reasoning orchestrator}---never the memory.  This
+is the neuro-symbolic split, and DCA-Trie instantiates it: the LLM
+generates, the TypeOracle and trie decide what is legal.
+
+The LLM earns its place exactly when the question is \textbf{not
+answerable by lookup alone}: when it needs composition, path-finding,
+or a natural-language interface to structured data.  Users of a
+substation or hospital system will not write SPARQL; they will say
+``which feeder is feeding the faulted bus?''  That utterance requires
+comprehension, decomposition, and path-finding over a structured model.
+
+%======================================================================
+\section{RAG vs.\ Agentic Retrieval vs.\ Constrained Decoding}
+%======================================================================
+
+These are three points on the \textbf{fluency--fidelity tradeoff}:
+how tightly the model's output is bound to external structure.
+
+\subsection{Retrieval-Augmented Generation (RAG)}
+
+\begin{itemize}
+  \item \emph{Context} is grounded: retrieve relevant passages/subgraph,
+    then generate conditioned on them.
+  \item The \emph{generation} remains free: the model can still ignore
+    the retrieved context and answer from parametric memory.
+  \item One-shot, no feedback loop.
+  \item Retrieval quality is the bottleneck: bad retrieval $\Rightarrow$
+    bad answer, regardless of generation quality.
+\end{itemize}
+
+\subsection{Agentic Retrieval}
+
+\begin{itemize}
+  \item Iterative, tool-using, reflective: the model decides what to
+    fetch, observes the results, and re-plans.
+  \item Buys \textbf{backtracking and recovery}---the structural
+    capability that a single-pass decoder lacks.
+  \item Examples: KBQA-o1 (MCTS), GraphRAG-style agent loops.
+  \item Cost: reasoning loops can explode; tool selection is still
+    model-decided, so the agent can chase the wrong subgraph.
+\end{itemize}
+
+\subsection{Constrained Decoding}
+
+\begin{itemize}
+  \item The tightest coupling: the graph constrains the
+    \emph{generation process itself} at the token level.
+  \item RAG \emph{suggests}; constrained decoding \emph{forbids}.
+    It is impossible for the model to emit a token that leads off the
+    graph.
+  \item The strongest fidelity guarantee---at the cost of
+    \textbf{dead ends}: over-constraint can leave no valid completion.
+\end{itemize}
+
+\begin{center}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+  & RAG & Agentic & Constrained \\
+\midrule
+  Grounding point & Context & Process & Tokens \\
+  Feedback loop    & No      & Yes      & No \\
+  Backtracking     & No      & Yes      & No \\
+  Can hallucinate off-graph & Yes & Yes & \textbf{No} \\
+  Risk             & Stale/irrelevant context & Loop explosion & Dead ends \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The interesting design space is \emph{combining} them: agentic planning
+on the outside, constrained decoding on the inside.
+
+%======================================================================
+\section{You Can Define Your Own Schema---and That Is the Payoff}
+%======================================================================
+
+This is the key reason the TypeOracle generalizes beyond Freebase.
+Freebase is a \emph{general, shallow} ontology, which is exactly why
+our gates are permissive (13\% path reduction).  A \textbf{domain
+schema is narrow, deep, and precise}, so semantic gates become much
+stronger.
+
+\subsection{Substation / Electrical Grid (IEC 61850, IEC 61970)}
+
+\begin{itemize}
+  \item \textbf{Entities:} transformers, breakers, buses, relays,
+    protection zones, feeders.
+  \item \textbf{Relations:} \texttt{feeds}, \texttt{protects},
+    \texttt{measures}, \texttt{connected\_to}.
+  \item Example gate: $\range(\texttt{protects}) = \text{protection
+    devices} \to \text{protection zones}$.  The path
+    \texttt{transformer $\to$ protects $\to$ bus} is rejected because a
+    transformer is not a protection device.  In a safety-critical
+    domain, that rejection is the whole point.
+\end{itemize}
+
+\subsection{Health (SNOMED CT, RxNorm, ICD)}
+
+\begin{itemize}
+  \item \textbf{Entities:} patients, conditions, drugs, genes,
+    proteins, trials.
+  \item \textbf{Relations:} \texttt{treats}, \texttt{contraindicates},
+    \texttt{associated\_with}.
+  \item Example gate: a \texttt{contraindicates} gate prevents pairing a
+    drug with an incompatible condition.
+\end{itemize}
+
+\subsection{The Living Graph}
+
+A substation's SCADA telemetry is an event stream that \emph{mutates}
+the graph: breakers open, loads change, zones reconfigure.  The
+constrained-decoding approach survives this because the trie is rebuilt
+from the \textbf{current snapshot} for each query.  The questions become
+temporal---``what is the state of the network \emph{now}?''---which is
+temporal KGQA, a regime where a frozen parametric model fundamentally
+cannot compete.
+
+That the schema is \emph{yours} is also the point: Freebase constrains
+weakly because it is generic; your domain ontology constrains strongly
+because you control it.
+
+%======================================================================
+\section{Why the Field Is Genuinely Hard}
+%======================================================================
+
+Seven fundamental barriers---not engineering issues.
+
+\subsection{1. The representation gap}
+Natural language is linear, ambiguous, and under-specified; a graph is
+exact and combinatorial.  Mapping ``the big fuse box thing'' to
+\texttt{transformer \#7} is entity linking, and it is genuinely
+unsolved for messy input.
+
+\subsection{2. Combinatorial reasoning}
+Multi-hop reasoning is exponential: $O(d^L)$ paths.  Every constraint
+that makes this tractable trades away recall.  This is an
+information-theoretic tension, not a tuning problem.
+
+\subsection{3. Open-world incompleteness}
+KGs miss edges, miss types, and contain aliases and errors.  The
+oracle's conservatism (``allow when unknown'') is a double-edged
+sword: it never wrongly filters, but it barely filters at all.
+
+\subsection{4. Ontology quality is the ceiling}
+Semantic gates are only as strong as the type system.  Coarse
+ontology $\Rightarrow$ weak pruning (our 13\% on Freebase).  This is a
+\emph{data} problem, not an algorithm problem.
+
+\subsection{5. Hallucination is the model's inductive bias}
+LLMs are trained to be fluent, and fluency means ``plausible
+continuation''---not ``faithful to the graph.''  Constraining
+generation fights the training objective itself.  This is why
+constrained decoding is genuinely harder than it sounds.
+
+\subsection{6. Living knowledge}
+Static tries and embeddings go stale.  Reasoning over changing graphs
+(temporal KGQA) is largely unsolved.
+
+\subsection{7. Trust, not accuracy}
+89\% Hits@1 is a publication result; it is \emph{unacceptable} for a
+hospital or a grid operator.  Those domains demand provable, citable,
+explainable answers---and the ability to say ``I do not know'' rather
+than guess.  The entire fidelity apparatus exists to serve
+\emph{verifiability}, and current evaluation metrics do not even
+measure it.
+
+%======================================================================
+\section{Synthesis}
+%======================================================================
+
+The field is hard because it asks a \textbf{probabilistic, ungrounded
+system} to behave like a \textbf{deterministic, grounded query
+engine}---while preserving the fluency that makes the probabilistic
+system useful in the first place.
+
+Every method is a point on the fluency--fidelity tradeoff:
+
+\[
+  \underbrace{\text{Pure LLM}}_{\max \text{ fluency},\; \min \text{ fidelity}}
+  \;\longrightarrow\;
+  \underbrace{\text{RAG}}_{\text{context grounded}}
+  \;\longrightarrow\;
+  \underbrace{\text{Agentic}}_{\text{process grounded}}
+  \;\longrightarrow\;
+  \underbrace{\text{Constrained decoding}}_{\min \text{ fluency},\; \max \text{ fidelity}}
+\]
+
+DCA-Trie's thesis is that one can have \emph{a lot} of both by
+constraining at the token level with a \emph{semantic} gate---not just
+a topological one---and especially by controlling the schema.  The
+concrete move from 13\% Freebase pruning to a 60\%+ reduction on a
+domain ontology is the empirical path forward: the ceiling on
+pruning is set by the ontology, and the ontology is now ours to build.
+
+\end{document}

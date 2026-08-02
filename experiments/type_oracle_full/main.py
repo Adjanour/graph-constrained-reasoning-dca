@@ -1,7 +1,7 @@
 """
 main.py — CLI, logging, model loading, and experiment orchestration.
 
-Single entry point: ``main()``.  Call it directly or via ``run.py``.
+Single entry point: ``main()``.  Call it directly or via ``uv run``.
 """
 
 import argparse
@@ -27,7 +27,7 @@ from datasets import load_dataset
 from src.llms import get_registed_model
 from src.qa_prompt_builder import PathGenerationWithAnswerPromptBuilder
 
-from experiment import run_condition
+from experiment import run_condition, trace_sample
 from utils import logger
 
 
@@ -121,13 +121,26 @@ def run(argv=None):
     parser.add_argument("--beam-size", type=int, default=5,
                         help="Beam size for v2 iterative decoding (default: 5)")
     parser.add_argument("--max-samples", type=int, default=50)
-    parser.add_argument("--method", default="all", choices=["baseline", "v1", "v2", "all"])
+    parser.add_argument("--method", default="all",
+                        choices=["baseline", "v1", "v2", "v2-nogates", "all", "ablation"])
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--force-rerun", action="store_true",
                         help="Overwrite existing results and ignore lock file")
     parser.add_argument(
         "--sample-timeout", type=int, default=120,
         help="Per-sample timeout in seconds (0 = no limit)",
+    )
+    parser.add_argument(
+        "--trace", action="store_true",
+        help="Print per-sample trace output matching step_by_step.py format",
+    )
+    parser.add_argument(
+        "--collect-metrics", action="store_true",
+        help="Collect ablation metrics (BUR, SIR trajectory, volatility, RV)",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42,
+        help="Random seed for reproducibility",
     )
     args = parser.parse_args(argv)
 
@@ -154,6 +167,20 @@ def _run(args, output_base):
     """Core experiment logic (called inside the lock)."""
     _setup_logging(output_base)
     logger.info("DCA-Trie experiment start — output: %s", output_base)
+
+    # Set random seed
+    import random
+    import numpy as np
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    try:
+        import torch
+        torch.manual_seed(args.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(args.seed)
+    except ImportError:
+        pass
+    logger.info("Random seed: %d", args.seed)
 
     # GPU / attention detection
     has_a100 = False
@@ -217,7 +244,9 @@ def _run(args, output_base):
         "baseline": ["GCR_Baseline"],
         "v1": ["DCA_v1_Static"],
         "v2": ["DCA_v2_Dynamic"],
+        "v2-nogates": ["DCA_v2_NoGates"],
         "all": ["GCR_Baseline", "DCA_v1_Static", "DCA_v2_Dynamic"],
+        "ablation": ["GCR_Baseline", "DCA_v1_Static", "DCA_v2_Dynamic", "DCA_v2_NoGates"],
     }[args.method]
 
     all_summary = {}
@@ -240,6 +269,8 @@ def _run(args, output_base):
                 max_new_tokens=args.max_new_tokens,
                 sample_timeout_s=args.sample_timeout,
                 beam_size=args.beam_size,
+                trace=args.trace,
+                collect_metrics=args.collect_metrics,
             )
             all_summary[(ds_name, cond)] = metrics
 

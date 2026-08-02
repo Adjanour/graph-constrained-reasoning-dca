@@ -418,3 +418,27 @@ Result: Both methods get this question correct
 - [Evaluation Metrics Guide](EVALUATION_METRICS.md) — Complete metric definitions and usage
 - [ORT Improvements](ORT_IMPROVEMENTS.md) — Experimental ORT implementation
 - [Remaining Experiments](REMAINING_EXPERIMENTS.md) — Commands for pending experiments
+
+---
+
+## SIR Stability Analysis
+
+### TypeOracle Symbolic Path Filtering (Full Dataset, 1,628 WebQSP)
+
+| Metric | Value |
+|--------|-------|
+| Total raw paths | 4,102,833 |
+| After filtering | 3,509,451 |
+| Pruned | 593,382 |
+| **SIR (overall)** | **14.46%** |
+| SIR_type | 10.62% |
+| SIR_traj | 3.84% |
+| FNR_type | 3.30% |
+| FNR_range | 2.86% |
+| Range-blocked | 157,485 |
+| Type-blocked | 435,897 |
+| Gold paths analyzed | 14,829 |
+| Type false negatives | 490 |
+| Range false negatives | 424 |
+
+SIR is stable across sample sizes: 14.46% (1,628) → 14.57% (1,000) → 15.94% (100) → 20.39% (20). Smaller samples overestimate SIR.

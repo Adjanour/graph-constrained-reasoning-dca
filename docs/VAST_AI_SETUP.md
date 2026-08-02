@@ -70,7 +70,7 @@ Add it to Vast.ai via one of:
 
 ## 2. Instance Requirements
 
-Based on `experiments/type_oracle_full/README.md` and `setup.sh`:
+Based on `experiments/type_oracle_full/README.md` and `scripts/setup-env.sh`:
 
 | Requirement | Minimum | Recommended | Why |
 |---|---|---|---|
@@ -363,10 +363,10 @@ source /venv/main/bin/activate
 python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, GPU: {torch.cuda.get_device_name(0)}')"
 
 # Install experiment dependencies
-bash experiments/type_oracle_full/setup.sh
+bash scripts/setup-env.sh
 ```
 
-### What `setup.sh` Does
+### What `setup-env.sh` Does
 
 1. Installs: `transformers==4.44.2`, `accelerate`, `datasets`, `marisa-trie`,
    `networkx`, `scikit-learn`, `tiktoken`, `sentencepiece`, `protobuf`
@@ -396,25 +396,25 @@ cd /workspace/graph-constrained-reasoning
 source /venv/main/bin/activate  # if not already activated
 
 # Quick test — 10 samples, both datasets, all 3 methods
-bash experiments/type_oracle_full/run.sh --max-samples 10
+bash experiments/type_oracle_full/main.py --max-samples 10
 
 # Default — 50 samples, both datasets, all 3 methods
-bash experiments/type_oracle_full/run.sh
+bash experiments/type_oracle_full/main.py
 
 # Full test set (no subsampling)
-bash experiments/type_oracle_full/run.sh --full
+bash experiments/type_oracle_full/main.py --full
 
 # One dataset only
-bash experiments/type_oracle_full/run.sh --datasets RoG-webqsp
+bash experiments/type_oracle_full/main.py --datasets RoG-webqsp
 
 # One method only (baseline, v1, v2)
-bash experiments/type_oracle_full/run.sh --method v2
+bash experiments/type_oracle_full/main.py --method v2
 ```
 
 ### Run in Background (Recommended for Long Runs)
 
 ```bash
-nohup bash experiments/type_oracle_full/run.sh > /workspace/experiment.log 2>&1 &
+nohup bash experiments/type_oracle_full/main.py > /workspace/experiment.log 2>&1 &
 tail -f /workspace/experiment.log
 ```
 
@@ -542,7 +542,7 @@ if [ ! -d "graph-constrained-reasoning" ]; then
     git clone https://github.com/Adjanour/graph-constrained-reasoning-dca.git
 fi
 cd graph-constrained-reasoning
-bash experiments/type_oracle_full/setup.sh
+bash scripts/setup-env.sh
 env >> /etc/environment
 ```
 
@@ -578,8 +578,8 @@ Min deposit: $5 USD. `vastai show charges` / `vastai show instances` / `vastai s
 2. cloud.vast.ai → Templates → PyTorch → Rent
 3. ssh -p PORT root@IP
 4. cd /workspace && git clone <repo> && cd graph-constrained-reasoning
-5. bash experiments/type_oracle_full/setup.sh
-6. bash experiments/type_oracle_full/run.sh
+5. bash scripts/setup-env.sh
+6. bash experiments/type_oracle_full/main.py
 7. Ctrl+b, d (tmux detach)
 8. scp -P PORT -r root@IP:/workspace/.../results/ ./
 9. vastai destroy instance INSTANCE_ID
@@ -590,3 +590,315 @@ Min deposit: $5 USD. `vastai show charges` / `vastai show instances` / `vastai s
 ## Sources
 
 [Quickstart](https://docs.vast.ai/quickstart) · [Instances](https://docs.vast.ai/guides/instances/overview) · [Pricing](https://docs.vast.ai/guides/instances/pricing) · [SSH](https://docs.vast.ai/guides/instances/connect/ssh) · [Storage](https://docs.vast.ai/guides/instances/storage) · [Data Movement](https://docs.vast.ai/guides/instances/data-movement) · [Templates](https://docs.vast.ai/guides/templates/creating-templates) · [Template Settings](https://docs.vast.ai/guides/templates/template-settings) · [Advanced Setup](https://docs.vast.ai/guides/templates/advanced-setup) · [PyTorch](https://docs.vast.ai/pytorch) · [CLI](https://docs.vast.ai/cli/reference) · [Community Guide](https://github.com/joystiller/vast-ai-guide)
+
+---
+
+## Automation Architecture
+
+One-command GPU orchestration for the DCA-Trie experiment. These scripts handle
+the entire lifecycle: search → rent → setup → run → download → destroy.
+
+### Prerequisites
+
+```bash
+pip install vastai
+vastai set api-key YOUR_API_KEY
+# SSH key added to your Vast.ai account (Settings → SSH Keys)
+```
+
+You also need `jq` (JSON parser):
+```bash
+# macOS
+brew install jq
+# Ubuntu/Debian
+sudo apt install jq
+```
+
+### Quick Start
+
+```bash
+# Full run — both datasets, all 3 methods, ~8–12 hours, ~$3
+bash scripts/run_vast.sh
+
+# Quick test — 10 samples, both datasets, ~10 minutes
+bash scripts/run_vast.sh --max-samples 10
+
+# One dataset only
+bash scripts/run_vast.sh --datasets RoG-webqsp
+
+# One method only
+bash scripts/run_vast.sh --method v2
+
+# Use a specific offer you found
+bash scripts/run_vast.sh --offer 44169006
+
+# Different GPU
+bash scripts/run_vast.sh --gpu A100_40GB
+```
+
+All arguments except `--offer`, `--gpu`, `--image`, and `--disk` are forwarded
+directly to `experiments/type_oracle_full/main.py`.
+
+### Lifecycle
+
+```
+1. Search     vastai search offers for cheapest GPU matching filters
+2. Rent       vastai create instance with PyTorch image + SSH
+3. Wait       Poll until instance status is "running"
+4. Upload     scp vast_boot.sh to /workspace/ on the instance
+5. Setup      Boot script: git clone → setup-env.sh → pip install deps
+6. Run        Start main.py with --full (or your args) via nohup
+7. Monitor    Poll experiment.log every 60s, print latest line
+8. Download   scp results/ directory back to local machine
+9. Clean up   Prompt to destroy instance (or keep alive)
+```
+
+### Scripts
+
+#### `scripts/run_vast.sh` (runs on your machine)
+
+The main orchestrator. Searches, rents, connects, monitors, downloads.
+
+**Flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--offer ID` | auto-search | Use a specific Vast.ai offer ID |
+| `--gpu NAME` | `RTX_4090` | GPU filter for auto-search |
+| `--image` | `vastai/pytorch:2.6.0-cuda-12.6.3-py312` | Docker image |
+| `--disk` | `200` | Disk size in GB |
+| `--help` | — | Print usage |
+
+Everything else is forwarded to `main.py` (e.g., `--max-samples`, `--method`, `--datasets`).
+
+#### `scripts/vast_boot.sh` (runs on the instance)
+
+Boot script uploaded and executed on the instance. It:
+
+1. Activates the PyTorch venv (`/venv/main`)
+2. Prints Python/PyTorch/CUDA versions to log
+3. Clones (or `git pull`) the repo
+4. Runs `scripts/setup-env.sh`
+5. Writes `/workspace/setup_done.flag` to signal completion
+
+Logs are written to `/workspace/vast_boot.log`.
+
+### How Monitoring Works
+
+The orchestrator polls two things:
+
+1. **Boot phase**: checks for `/workspace/setup_done.flag` every 15s (max 30 min)
+2. **Experiment phase**: checks for `"Results saved to"` in `experiment.log` every 60s
+
+You can also monitor manually from another terminal:
+
+```bash
+# Watch setup progress
+ssh -p PORT root@HOST 'tail -f /workspace/vast_boot.log'
+
+# Watch experiment progress
+ssh -p PORT root@HOST 'tail -f /workspace/experiment.log'
+
+# Check GPU usage
+ssh -p PORT root@HOST 'watch -n 5 nvidia-smi'
+```
+
+### Output
+
+Results are downloaded to `results_from_vast/` in the project root:
+
+```
+results_from_vast/
+├── experiment.log                         # Full experiment log
+└── results/
+    └── final_experiment/
+        └── <timestamp>/
+            ├── config.json
+            ├── summary.json               # ← key metrics
+            ├── run.log
+            ├── RoG-webqsp/
+            │   ├── predictions_GCR_Baseline.jsonl
+            │   ├── predictions_DCA_v1_Static.jsonl
+            │   └── predictions_DCA_v2_Dynamic.jsonl
+            └── RoG-cwq/
+                └── ...
+```
+
+### Error Handling
+
+| Situation | Behavior |
+|---|---|
+| No offers found | Exits with error, suggests CLI search |
+| Instance fails to start | Times out after 15 min |
+| Boot/setup script fails | Times out after 30 min, shows log path |
+| Experiment errors (OOM, etc.) | Prints warning, continues monitoring |
+| SSH connection drops | Retries automatically (SSH keepalive) |
+| Instance preempted (interruptible) | Experiment has checkpoint/resume — re-run picks up where it left off |
+
+### Cost Estimate
+
+| Scenario | GPU | Time | Cost |
+|---|---|---|---|
+| Quick test (10 samples) | RTX 4090 @ $0.32/hr | ~5 min | < $0.05 |
+| Default (50 samples) | RTX 4090 @ $0.32/hr | ~30 min | ~$0.16 |
+| Full run (all samples) | RTX 4090 @ $0.32/hr | ~10 hr | ~$3.20 |
+| Full run (A100) | A100 40GB @ $0.80/hr | ~7 hr | ~$5.60 |
+
+### Example Session
+
+```bash
+$ bash scripts/run_vast.sh --method v1
+
+========================================
+  Vast.ai DCA-Trie Orchestrator
+========================================
+GPU: RTX_4090  Disk: 200GB
+Docker: vastai/pytorch:2.6.0-cuda-12.6.3-py312
+Results: /home/bernard/.../results_from_vast
+Args: --method v1
+========================================
+
+→ Searching for RTX_4090 offers...
+  Found offer: 44169006
+
+→ Renting instance...
+  Instance ID: 98765
+
+→ Waiting for instance to start (polling every 15s)...
+  Loading image...
+  Instance is running.
+
+→ Getting SSH details...
+  ssh -p 12345 root@52.204.230.7
+
+→ Uploading boot script...
+→ Running boot script (clone + dependencies)...
+→ Waiting for setup to finish (polling every 15s)...
+  Setup complete.
+
+→ Starting experiment...
+→ Experiment running. Monitoring every 60s...
+
+  [0] [DCA_v1_Static] 10/1628 2.31 q/s | 4s | skip=0 dead=0
+  [1] [DCA_v1_Static] 20/1628 2.28 q/s | 9s | skip=0 dead=0
+  ...
+
+→ Downloading results to results_from_vast/ ...
+  Results saved to: results_from_vast/
+
+========================================
+  DONE
+========================================
+
+Destroy instance now? [y/N] y
+Instance destroyed. Billing stopped.
+```
+
+---
+
+## Command Reference
+
+### SSH + Pull (always first)
+
+```bash
+ssh -p PORT root@HOST
+cd /workspace/graph-constrained-reasoning
+git pull
+source /venv/main/bin/activate
+```
+
+### Dry Run (10 samples, verify everything works)
+
+#### v2 on CWQ
+```bash
+python experiments/type_oracle_full/main.py \
+  --datasets RoG-cwq --method v2 --max-samples 10 \
+  --output-dir results/cwq_dryrun
+```
+
+#### All methods on CWQ
+```bash
+python experiments/type_oracle_full/main.py \
+  --datasets RoG-cwq --method all --max-samples 10 \
+  --output-dir results/cwq_dryrun_all
+```
+
+### Full Runs (background, survive SSH disconnect)
+
+#### v2 on CWQ (~3.5K questions, 3-4 hrs)
+```bash
+nohup python experiments/type_oracle_full/main.py \
+  --datasets RoG-cwq --method v2 --max-samples 999999 \
+  --output-dir results/cwq_v2 \
+  > /workspace/cwq_v2.log 2>&1 &
+
+tail -f /workspace/cwq_v2.log
+```
+
+#### All methods on CWQ (baseline + v1 + v2, ~8-10 hrs)
+```bash
+nohup python experiments/type_oracle_full/main.py \
+  --datasets RoG-cwq --method all --max-samples 999999 \
+  --output-dir results/cwq_all \
+  > /workspace/cwq_all.log 2>&1 &
+
+tail -f /workspace/cwq_all.log
+```
+
+#### v2 on WebQSP (compare against old buggy 54.9%)
+```bash
+nohup python experiments/type_oracle_full/main.py \
+  --datasets RoG-webqsp --method v2 --max-samples 999999 \
+  --output-dir results/webqsp_v2_fixed \
+  > /workspace/webqsp_v2_fixed.log 2>&1 &
+
+tail -f /workspace/webqsp_v2_fixed.log
+```
+
+### Retrieve Results
+
+#### From your machine (replace PORT + HOST with Vast.ai details)
+```bash
+scp -P PORT -r root@HOST:/workspace/graph-constrained-reasoning/results/ ./results_from_vast/
+scp -P PORT root@HOST:/workspace/cwq_v2.log ./results_from_vast/
+```
+
+### Automated Launch (local machine, ONE COMMAND)
+
+Full lifecycle: search → rent → setup → run → download → destroy:
+
+```bash
+cd /home/bernard/research/projects/graph-constrained-reasoning
+
+# Dry run on WebQSP (10 samples, all methods)
+bash scripts/run_vast.sh --max-samples 10 --dataset RoG-webqsp --experiment 4ideas
+
+# Dry run with adaptive-budget experiment
+bash scripts/run_vast.sh --max-samples 10 --dataset RoG-webqsp --experiment adaptive-budget
+
+# Full v2 on CWQ (main.py)
+bash scripts/run_vast.sh --dataset RoG-cwq --method v2 --max-samples 999999
+
+# Full 4-ideas run on WebQSP
+bash scripts/run_vast.sh --dataset RoG-webqsp --experiment 4ideas --max-samples 999999
+
+# Full adaptive-budget run on WebQSP
+bash scripts/run_vast.sh --dataset RoG-webqsp --experiment adaptive-budget --max-samples 999999
+```
+
+### Manual SSH (if automated script fails)
+
+```bash
+# On Vast.ai instance:
+cd /workspace
+git clone https://github.com/Adjanour/graph-constrained-reasoning-dca.git
+cd graph-constrained-reasoning-dca
+pip install -e .
+
+# Run experiment
+uv run python experiments/type_oracle_full/main.py \
+  --model-path rmanluo/GCR-Meta-Llama-3.1-8B-Instruct \
+  --datasets RoG-webqsp --max-samples 10 \
+  --method all \
+  --output-dir results/dryrun
+```

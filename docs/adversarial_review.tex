@@ -1,0 +1,245 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue}
+
+\newcommand{\G}{\mathcal{G}}
+\newcommand{\T}{\mathcal{T}}
+\newcommand{\range}{\mathrm{range}}
+
+\title{Adversarial Review of DCA-Trie:\\Where the Project Is Wrong,\\
+Why It Is Wrong, and What Would Fix It}
+\author{Bernard Katamanso}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document is a deliberate, adversarial review of the DCA-Trie
+project.  Its purpose is not to defend the work but to find where the
+claims, the evidence, or the evaluation are wrong.  It surfaces five
+concrete problems: (1) the evaluation metric is lenient; (2) the
+empirical cost--benefit of filtering is negative; (3) Freebase ID
+filtering silently destroys answer reachability; (4) the ontology is
+both too coarse and too incomplete for the gates to be discriminating;
+and (5) the claims about the fixed v2 are unverified.  For each we
+state the evidence, the mechanism, and what would fix it.
+\end{abstract}
+
+%======================================================================
+\section{Problem 1: The Evaluation Metric Is Lenient}
+%======================================================================
+
+The Hits@1 metric uses substring containment rather than exact
+matching.  In \texttt{src/utils/qa\_utils.py}:
+
+\begin{verbatim}
+def match(s1, s2):
+    s1 = normalize(s1)
+    s2 = normalize(s2)
+    return s2 in s1      # answer must be a SUBSTRING of prediction
+\end{verbatim}
+
+The prediction is scored correct if the normalized answer string
+appears anywhere inside it.  Consequences:
+
+\begin{itemize}
+  \item A prediction of ``Jamaican'' scores a hit against the
+    ground truth ``Jamaican Creole English Language.''
+  \item Verbose or partially-correct generations are forgiven.
+  \item The number does not measure \emph{faithful} reasoning --- the
+    exact thing graph-constrained decoding claims to provide.
+\end{itemize}
+
+\textbf{Where this is wrong:} the headline numbers (89\%, 88\%) are
+upper bounds on faithful reasoning.  The gap between Hits@1 and
+exact-match Hits@1 was never measured.
+
+\textbf{Fix:} report exact-match Hits@1 alongside substring Hits@1, and
+report a per-path validity score (is every hop an actual KG edge?).
+
+%======================================================================
+\section{Problem 2: The Filtering Cost--Benefit Is Negative}
+%======================================================================
+
+The central claim of DCA-Trie v1 is that TypeOracle filtering
+``reduces paths while preserving accuracy.''  The evidence says
+otherwise:
+
+\begin{center}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+  Dataset & Path reduction & Accuracy $\Delta$ & Time $\Delta$ \\
+\midrule
+  WebQSP (100) & 13.3\% & $-1.0$pp & $-0.13$s/q \\
+  CWQ (100)    & 10.4\% & $-4.0$pp & $-0.10$s/q \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Filtering removes paths but \emph{also removes correct answers}, and the
+accuracy loss grows with graph depth ($-1$pp at 2 hops, $-4$pp at 4
+hops).  The time saved ($\sim$0.1 s/q) is negligible relative to the
+6+ s/q that beam search costs.
+
+\textbf{Where this is wrong:} the value proposition of v1 is
+``cheaper for the same accuracy.''  It delivers ``slightly cheaper and
+slightly worse,'' with the accuracy penalty concentrated exactly where
+the work claims to shine (deep graphs).
+
+\textbf{Fix:} either (a) show filtering helps on a domain where the
+ontology is dense and correct, or (b) reframe the contribution as a
+\emph{validation} layer (catch wrong predictions) rather than a
+\emph{pruning} layer.
+
+%======================================================================
+\section{Problem 3: Freebase ID Filtering Destroys Reachability}
+%======================================================================
+
+The v2 fix to the ``entity name vs ID'' mismatch was to \emph{filter
+Freebase IDs out of the trie}:
+
+\begin{verbatim}
+_FB_ID_RE = re.compile(r"^[gm]\.\w+$")
+def _get_gated_paths(nx_graph, head_entity, oracle, ...):
+    for neighbor in nx_graph.neighbors(head_entity):
+        if _is_freebase_id(neighbor):
+            continue   # <-- silently drops the path
+        ...
+\end{verbatim}
+
+This ``fix'' introduces a \emph{recall} bug.  Measured on the 10-sample
+demo set:
+
+\begin{center}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+  & Answers reachable & Lost \\
+\midrule
+  After TypeOracle gates (v1)        & 94\% & 6\% \\
+  After v2 Freebase-ID filtering     & 89\% & 11\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Eight of 72 answers (11\%) become \emph{structurally unreachable}
+because the only path to them passes through a Freebase ID entity such
+as \texttt{m.04kq1r9}.
+
+\textbf{Where this is wrong:} the ``fix'' guarantees the model can never
+generate the correct answer for 11\% of questions.  The trie can only
+output names, but the KG stores many facts via IDs.  Filtering the IDs
+does not make the model smarter --- it removes the evidence.
+
+\textbf{Fix:} \emph{canonicalization}, not filtering.  Map Freebase IDs
+to their human-readable names via the KG's \texttt{common.topic}
+metadata before building the trie, so the path \emph{name} is in the
+trie while the \emph{edge} still points at the ID entity.
+
+%======================================================================
+\section{Problem 4: The Ontology Is Both Coarse and Incomplete}
+%======================================================================
+
+The TypeOracle's discriminating power is bounded by two facts:
+
+\subsection{Coarseness}
+Nine hand-curated type groups and 38 relations.  The ranges are broad:
+\texttt{people.person.nationality} has range = 7 location types.  A gate
+that admits anything typed ``Location'' prunes almost nothing.
+
+\subsection{Incompleteness}
+In the WebQSP subgraphs, roughly 78\% of nodes are Freebase IDs with
+\emph{no} recorded types.  Both gates are \emph{conservative}:
+unknown entity $\Rightarrow$ allow.  So the gates only fire on the
+minority of entities whose types are known, and even then only when
+those types conflict with a relation range.
+
+\textbf{Where this is wrong:} the two sources of information
+(hand-curated schema, auto-mined schema) both depend on type coverage,
+which is sparse.  The gates are permissive not by design choice but
+because the ontology cannot discriminate.  The 13\% reduction is the
+\emph{ceiling} of what this ontology can prune --- and it comes at a
+negative accuracy cost.
+
+\textbf{Fix:} demonstrate the approach on a \emph{controlled} ontology
+(substation IEC 61850, medical SNOMED-CT) where types are complete and
+ranges are narrow.  The Freebase experiment can only ever show weak
+gates.
+
+%======================================================================
+\section{Problem 5: The Fixed v2 Claims Are Unverified}
+%======================================================================
+
+Commit \texttt{b27570e} claims: ``v2 beam search + Freebase ID
+filtering + demo scripts.''  The intent is ``post-fix v2 should be
+comparable to v1.''  The evidence:
+
+\begin{itemize}
+  \item The only post-fix run is a 3-sample smoke test (33\%).
+  \item The 56\%/54.9\% figures predate the context-accumulation fix.
+  \item No evaluation of beam-size $>1$, score tracking, or
+    diversification has been run.
+  \item The claim ``comparable to v1'' is \emph{assumed}, not shown.
+\end{itemize}
+
+\textbf{Where this is wrong:} the project is committing to a narrative
+(``v2 is fixed'') before the data exists.  The v2 architecture had
+already been declared ``conclusively false'' in the earlier
+CHAPTER4\_RESULTS notes; the new fixes address symptoms
+(beam search, IDs, scores) but not the architectural problem
+(tokenization misalignment in per-hop trie construction).
+
+\textbf{Fix:} run the post-fix evaluation \emph{before} continuing to
+write about v2.  If the fix does not recover v1-level accuracy, the
+correct conclusion is that iterative per-hop decoding is not viable
+with this tokenizer, and the thesis should pivot to the v1 + validation
+direction.
+
+%======================================================================
+\section{What Is Right}
+%======================================================================
+
+To be fair, the adversarial review should state what holds up:
+
+\begin{itemize}
+  \item The \textbf{baseline reproduction} (89\% vs published 91.6\%) is
+    solid.
+  \item The \textbf{beam search finding} (+8--9pp over greedy) is a
+    genuine, useful contribution.
+  \item The \textbf{conceptual framing} --- well-formed chains (DoG)
+    are necessary but not sufficient; semantic gates add a real
+    constraint --- is intellectually sound and publishable as a
+    position/analysis.
+  \item The \textbf{domain-ontology vision} (living graphs, controlled
+    schemas) is the correct direction and has not been tested yet.
+\end{itemize}
+
+%======================================================================
+\section{Recommendation}
+%======================================================================
+
+The project's strongest current position is not ``filtering improves
+KGQA accuracy.''  It is:
+
+\begin{enumerate}
+  \item \textbf{Reproduce} the honest numbers: exact-match Hits@1,
+    path-validity, and a per-error-class breakdown (type errors vs.
+    retrieval errors vs. extraction errors).
+  \item \textbf{Reframe} filtering as \emph{validation}: use TypeOracle
+    as a post-hoc correctness check (already measured: catches 23.8\%
+    of errors at 95.5\% precision), not as a pruning pre-step.
+  \item \textbf{Test} the controlled-ontology thesis on a domain graph,
+    where the gates can finally be strong.
+  \item \textbf{Retire or rigorously re-test} v2; stop claiming fixes
+    without post-fix evaluation.
+\end{enumerate}
+
+\end{document}

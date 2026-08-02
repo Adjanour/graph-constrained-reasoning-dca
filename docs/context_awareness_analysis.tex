@@ -1,0 +1,231 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage[margin=2.5cm]{geometry}
+
+\newcommand{\G}{\mathcal{G}}
+\newcommand{\T}{\mathcal{T}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\Types}{\mathrm{Types}}
+\newcommand{\range}{\mathrm{range}}
+\newcommand{\true}{\mathsf{true}}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{corollary}[theorem]{Corollary}
+
+\title{Context-Aware Graph-Constrained Reasoning:\\
+Well-Formed Chains vs.\ Ontological Gates}
+\author{Bernard Katamanso}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+%======================================================================
+\section{What Does ``Context-Aware'' Mean?}
+%======================================================================
+
+In graph-constrained reasoning, the language model generates a reasoning
+path through a knowledge graph (KG).  ``Context awareness'' refers to the
+use of information beyond the raw prompt to constrain generation.  We
+identify five orthogonal dimensions:
+
+\begin{enumerate}[label=\textbf{D\arabic*},leftmargin=2.5em]
+  \item \textbf{Token-level context.}
+    The trie encodes valid token sequences derived from KG edges.
+    At every decode step, the \texttt{prefix\_allowed\_tokens\_fn}
+    callback restricts the model to tokens that appear in some valid
+    path prefix.  This is the tightest coupling between KG structure and
+    generation.
+
+  \item \textbf{Structural context.}
+    The KG topology---edges, hops, connectivity---determines which paths
+    exist.  Depth-first search enumerates all paths up to $L$ hops;
+    the model can only follow edges that are present in the subgraph.
+
+  \item \textbf{Semantic context.}
+    The ontology (entity types, relation domain/range) determines which
+    paths are \emph{type-compatible}.  A path may be topologically valid
+    yet semantically incoherent (e.g.\ a currency where a language is
+    expected).  The TypeOracle's \texttt{range\_gate} and
+    \texttt{type\_gate} enforce semantic constraints.
+
+  \item \textbf{Reasoning context.}
+    Each generated hop narrows the set of candidate entities for the
+    next hop.  In iterative decoding, the head pool is updated after
+    every hop, so the search space contracts as the model commits to
+    specific entities.
+
+  \item \textbf{Query context.}
+    The question itself determines what answer types to look for.
+    The regex-based \texttt{infer\_answer\_types} maps question words
+    to expected Freebase type sets, which in turn activate the
+    \texttt{type\_gate} at the terminal hop.
+\end{enumerate}
+
+These five layers are orthogonal.  The DoG framework uses D1 (token)
+and D2 (structural).  Our TypeOracle adds D3 (semantic) and D5 (query).
+D4 (reasoning context) remains underexploited: the \emph{content} of
+generated tokens could further refine the search before the type oracle
+is consulted.
+
+%======================================================================
+\section{Well-Formed Chains vs.\ Ontological Gates}
+%======================================================================
+
+\subsection{The Well-Formed Chain (DoG)}
+
+Following the DoG formulation~\cite{dog2025}, a \emph{chain} through
+a KG $\G = (V, E)$ is defined as
+\[
+  c = (v_0,\; e_1,\; v_1,\; e_2,\; \ldots,\; e_L,\; v_L),
+\]
+where $v_0$ is the query entity, each $e_l \in E$ is a relation, and
+each $v_l \in V$ is an entity.  The chain is \textbf{well-formed} if
+every hop follows a real edge:
+\[
+  \text{Well-formed}(c)
+  \;\iff\;
+  \forall\, l \in \{1,\ldots,L\}:\;
+  (v_{l-1},\, e_l,\, v_l) \in E.
+\]
+This is a purely \emph{topological} constraint---it prevents
+hallucinated edges but says nothing about types.
+
+\subsection{The TypeOracle Gates}
+
+The TypeOracle adds two semantic gates on top of the topological
+constraint.  Let $\T: V \to 2^{\Types}$ denote the entity--type mapping
+(extracted from \texttt{common.topic.notable\_types}) and let
+$\range: \E \to 2^{\Types}$ denote the relation range (hand-curated or
+auto-mined from the subgraph).
+
+\paragraph{Gate 1: Range constraint.}
+\[
+  \text{range\_gate}(e_l, v_l)
+  \;\iff\;
+  \T(v_l) \cap \range(e_l) \neq \emptyset
+  \quad\lor\quad
+  \T(v_l) = \emptyset
+  \quad\lor\quad
+  \range(e_l) = \emptyset.
+\]
+The disjunction with the empty-set cases encodes \emph{conservatism}:
+if no type information is available, the edge is admitted.
+
+\paragraph{Gate 2: Answer-type constraint (terminal hop).}
+\[
+  \text{type\_gate}(v_L, A, L, L)
+  \;\iff\;
+  \T(v_L) \cap A \neq \emptyset
+  \quad\lor\quad
+  \T(v_L) = \emptyset
+  \quad\lor\quad
+  A = \emptyset,
+\]
+where $A \subseteq \Types$ is the set of expected answer types inferred
+from the question.  This gate fires only at the terminal hop ($l = L$).
+
+\paragraph{Combined admission.}
+A candidate edge $(e_l, v_l)$ is admitted iff it passes both gates:
+\[
+  \text{admissible}(e_l, v_l)
+  \;=\;
+  \text{range\_gate}(e_l, v_l)
+  \;\land\;
+  \text{type\_gate}(v_l, A, l, L).
+\]
+
+\subsection{Formal Relationship}
+
+\begin{theorem}
+\label{thm:strict}
+If every admitted edge satisfies the range gate, then every admitted
+chain is well-formed:
+\[
+  \forall\, c:\;
+  \text{admissible}(c) \;\implies\; \text{Well-formed}(c).
+\]
+The converse does not hold.
+\end{theorem}
+
+\begin{proof}
+Admissibility requires $\T(v_l) \cap \range(e_l) \neq \emptyset$ for
+every hop.  In particular, $\T(v_l) \neq \emptyset$ and
+$\range(e_l) \neq \emptyset$, so the edge $(v_{l-1}, e_l, v_l)$ must
+exist in the KG (otherwise $\range(e_l)$ would not be defined).
+Hence the chain is well-formed.
+
+For the converse, consider the edge
+\texttt{location.country.languages\_spoken}
+with range $\{\texttt{Human Language}\}$.  The entity
+\texttt{Jamaican dollar} has type $\{\texttt{Currency}\}$, so
+$\T(\texttt{Jamaican dollar}) \cap \{\texttt{Human Language}\}
+= \emptyset$.  The edge exists in the KG (well-formed), but the range
+gate rejects it (not admissible).
+\end{proof}
+
+\subsection{Comparison}
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+  & Well-Formed Chain (DoG) & TypeOracle \\
+\midrule
+  Source       & KG adjacency $E$ & Ontology $\T$, $\range$ \\
+  Scope        & All hops          & All hops (range) + terminal (type) \\
+  Pruning power & Hallucinated edges only & Type-incompatible edges too \\
+  Complexity   & $O(1)$ edge lookup & $O(1)$ set intersection \\
+  Catches      & ``$X$ doesn't connect to $Y$'' & ``$Y$ is a Currency, expected Language'' \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Illustrative Example}
+
+\begin{quote}
+\textbf{Question:} ``What language is spoken in Jamaica?''\\[4pt]
+\textbf{Path:}
+\texttt{Jamaica $\to$ languages\_spoken $\to$ Jamaican dollar}
+\end{quote}
+
+This path is \emph{well-formed}: the edge exists in the KG.  But it is
+\emph{semantically wrong}: Jamaican dollar is a Currency, not a
+Language.  The TypeOracle catches this because
+$\range(\texttt{languages\_spoken}) = \{\texttt{Human Language}\}$
+and $\T(\texttt{Jamaican dollar}) = \{\texttt{Currency}\}$, so the
+intersection is empty.
+
+%======================================================================
+\section{Implications for Design}
+%======================================================================
+
+The well-formed chain is \textbf{necessary but not sufficient} for
+correct reasoning.  The TypeOracle is a \textbf{semantic filter on top
+of a topological constraint}.  Both layers are needed:
+
+\begin{itemize}
+  \item \textbf{Topological (DoG):} prevents hallucinated structure.
+  \item \textbf{Semantic (TypeOracle):} prevents type-incoherent structure.
+\end{itemize}
+
+Future work should exploit D4 (reasoning context) more aggressively:
+as the model generates each hop, the relation itself constrains the
+next entity---potentially without waiting for the type oracle.
+
+%======================================================================
+% Bibliography
+%======================================================================
+\begin{thebibliography}{1}
+\bibitem{dog2025}
+  Lee et al., ``Decoding on Graph: Augmenting LLM Reasoning with
+  Knowledge Graph Structured Search,'' \emph{ACL}, 2025.
+  arXiv:2410.18415.
+\end{thebibliography}
+
+\end{document}
