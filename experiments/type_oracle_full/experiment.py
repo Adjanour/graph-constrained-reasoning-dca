@@ -139,49 +139,19 @@ class PrepCache:
 
 
 def compute_hits(preds):
-    """Compute Hits@1: check if any extracted answer matches a ground-truth answer.
+    """Compute Hits@1 using the repo's substring evaluator.
 
-    Mirrors the original GCR ``eval_path_result_w_ans`` behaviour:
-    - Parses ``# Answer:\\n<answer>`` from each prediction
-    - Uses substring containment (``eval_hit``) for matching
+    Matches ``src.utils.qa_utils.eval_hit`` on the raw prediction string.
     """
-    return sum(
-        1
-        for p in preds
-        if p.get("ground_truth")
-        and eval_hit(
-            p.get("prediction", "") if isinstance(p.get("prediction", ""), str) else " ".join(p.get("prediction", [])),
-            list(set(p.get("ground_truth", []))),
-        )
-    )
     hits = 0
     for p in preds:
         prediction = p.get("prediction", "")
         answers = list(set(p.get("ground_truth", [])))
         if not answers:
             continue
-
-        # Extract answer strings from structured predictions
-        predicted_answers = []
-        items = prediction if isinstance(prediction, list) else [prediction]
-        for item in items:
-            if "# Answer:\n" in item:
-                ans = item.split("# Answer:\n")[-1].strip()
-                if ans:
-                    predicted_answers.append(ans)
-            elif "# Answer:" in item:
-                ans = item.split("# Answer:")[-1].strip()
-                if ans:
-                    predicted_answers.append(ans)
-
-        if not predicted_answers:
-            continue
-
-        # Substring containment check (matches original eval_hit behaviour)
-        pred_str = " ".join(predicted_answers)
+        pred_str = prediction if isinstance(prediction, str) else " ".join(prediction)
         if eval_hit(pred_str, answers):
             hits += 1
-
     return hits
 
 
