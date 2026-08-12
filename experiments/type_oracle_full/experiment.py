@@ -145,6 +145,15 @@ def compute_hits(preds):
     - Parses ``# Answer:\\n<answer>`` from each prediction
     - Uses substring containment (``eval_hit``) for matching
     """
+    return sum(
+        1
+        for p in preds
+        if p.get("ground_truth")
+        and eval_hit(
+            p.get("prediction", "") if isinstance(p.get("prediction", ""), str) else " ".join(p.get("prediction", [])),
+            list(set(p.get("ground_truth", []))),
+        )
+    )
     hits = 0
     for p in preds:
         prediction = p.get("prediction", "")
