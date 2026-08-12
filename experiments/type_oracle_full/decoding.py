@@ -54,7 +54,7 @@ class BeamUnit:
 
 def run_constrained_decoding(model, input_builder, data, trie):
     """Run graph-constrained decoding for a single question (baseline / v1)."""
-    input_query = input_builder.process_input(data)
+    input_query, ground_paths, _ = input_builder.process_input(data, return_tire=False)
     start_token_ids = model.tokenizer.convert_tokens_to_ids(input_builder.PATH_START_TOKEN)
     end_token_ids = model.tokenizer.convert_tokens_to_ids(input_builder.PATH_END_TOKEN)
     llm_input = model.prepare_model_prompt(input_query)
@@ -69,7 +69,7 @@ def run_constrained_decoding(model, input_builder, data, trie):
     )
     logger.debug("Prediction type=%s value=%s", type(prediction).__name__,
                  repr(prediction)[:200] if prediction else "None")
-    return prediction, None
+    return prediction, ground_paths
 
 
 # ---------------------------------------------------------------------------
@@ -162,13 +162,32 @@ def dca_v2_generate(
     end_id = tokenizer.convert_tokens_to_ids(PATH_END)
 
     # Build initial prompt (matches v1/baseline format)
-    prompt = input_builder.process_input(data)
+    prompt, _, _ = input_builder.process_input(data, return_tire=False)
     answer_markers = ["Answer:", "A:", "answer:"]
     for marker in answer_markers:
         idx = prompt.rfind(marker)
         if idx != -1:
             prompt = prompt[:idx].rstrip()
             break
+
+    def _normalize_completion(text: str) -> str | None:
+        """Extract a path from a generated completion.
+
+        `generate()` returns only the completion after the prompt, so the
+        leading `<PATH>` token is not present in `text`. Accept either the
+        wrapped form or the raw completion form.
+        """
+        path_content = _extract_path_content(text)
+        if path_content is not None:
+            return path_content
+
+        # Raw completion form: `Jamaica -> ...` possibly with a trailing END token.
+        raw = text.strip()
+        if not raw:
+            return None
+        if raw.endswith(PATH_END):
+            raw = raw[: -len(PATH_END)].strip()
+        return raw or None
 
     # ── Metrics collection state ──
     metrics = AblationMetrics(qid=data["id"]) if collect_metrics else None
@@ -287,7 +306,7 @@ def dca_v2_generate(
                 output_tokens = res.sequences[seq_idx][input_ids.shape[1]:]
                 output_text = tokenizer.decode(output_tokens, skip_special_tokens=False)
 
-                path_content = _extract_path_content(output_text)
+                path_content = _normalize_completion(output_text)
                 if path_content is None:
                     continue
 
