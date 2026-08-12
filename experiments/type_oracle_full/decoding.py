@@ -54,7 +54,7 @@ class BeamUnit:
 
 def run_constrained_decoding(model, input_builder, data, trie):
     """Run graph-constrained decoding for a single question (baseline / v1)."""
-    input_query, ground_paths, _ = input_builder.process_input(data, return_tire=False)
+    input_query = input_builder.process_input(data)
     start_token_ids = model.tokenizer.convert_tokens_to_ids(input_builder.PATH_START_TOKEN)
     end_token_ids = model.tokenizer.convert_tokens_to_ids(input_builder.PATH_END_TOKEN)
     llm_input = model.prepare_model_prompt(input_query)
@@ -69,7 +69,7 @@ def run_constrained_decoding(model, input_builder, data, trie):
     )
     logger.debug("Prediction type=%s value=%s", type(prediction).__name__,
                  repr(prediction)[:200] if prediction else "None")
-    return prediction, ground_paths
+    return prediction, None
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +162,7 @@ def dca_v2_generate(
     end_id = tokenizer.convert_tokens_to_ids(PATH_END)
 
     # Build initial prompt (matches v1/baseline format)
-    prompt, _, _ = input_builder.process_input(data, return_tire=False)
+    prompt = input_builder.process_input(data)
     answer_markers = ["Answer:", "A:", "answer:"]
     for marker in answer_markers:
         idx = prompt.rfind(marker)
