@@ -75,7 +75,7 @@ Based on `experiments/type_oracle_full/README.md` and `scripts/setup-env.sh`:
 | Requirement | Minimum | Recommended | Why |
 |---|---|---|---|
 | **GPU VRAM** | 16 GB | 40 GB (A100 40GB) | `rmanluo/GCR-Meta-Llama-3.1-8B-Instruct` is ~16 GB in FP16; group-beam search needs headroom |
-| **GPU Model** | Any NVIDIA with 16 GB+ | A100 40GB or A100 80GB | flash-attn 2.x has pre-built wheels for A100; ~20% faster beam search |
+| **GPU Model** | Any NVIDIA with 16 GB+ | Any sm_80+ card (Ampere or newer) | flash-attn 2 needs sm_80+; ~20% faster beam search |
 | **CUDA** | ≥ 12.1 | 12.4+ | Required by transformers 4.44+ and flash-attn |
 | **System RAM** | 32 GB | 64 GB | Graph data, trie construction, and dataset loading |
 | **Disk** | 80 GB | 150 GB | Model weights (~16 GB) + HuggingFace cache + datasets + results |
@@ -83,13 +83,24 @@ Based on `experiments/type_oracle_full/README.md` and `scripts/setup-env.sh`:
 
 ### GPU Options (cheapest → best)
 
-| GPU | VRAM | flash-attn? | Typical Price | Notes |
-|---|---|---|---|---|
-| RTX 4090 | 24 GB | No pre-built wheel; sdpa fallback | $0.20–0.40/hr | Budget option, ~20% slower without flash-attn |
-| RTX 3090 | 24 GB | No | $0.15–0.30/hr | Older, slower, but works |
-| A100 40GB | 40 GB | Yes | $0.50–1.50/hr | Best balance — flash-attn works, fits everything comfortably |
-| A100 80GB | 80 GB | Yes | $0.80–2.00/hr | Most comfortable, no VRAM worries at all |
-| H100 80GB | 80 GB | Yes | $1.50–3.50/hr | Overkill for this experiment |
+| GPU | VRAM | Arch | flash-attn 2? | Typical Price | Notes |
+|---|---|---|---|---|---|
+| RTX 3090 | 24 GB | sm_86 | Yes | $0.15–0.30/hr | Ampere — wheels exist; older and slower |
+| RTX 4090 | 24 GB | sm_89 | Yes | $0.20–0.40/hr | Best value; fits with room for beam search |
+| L40S | 48 GB | sm_89 | Yes | $0.60–1.00/hr | Plenty of headroom |
+| A100 40GB | 40 GB | sm_80 | Yes | $0.50–1.50/hr | Fits everything comfortably |
+| A100 80GB | 80 GB | sm_80 | Yes | $0.80–2.00/hr | No VRAM worries at all |
+| H100 80GB | 80 GB | sm_90 | Yes | $1.50–3.50/hr | Overkill for this experiment |
+| T4 / V100 | 16 GB | sm_75/70 | **No** | $0.10–0.25/hr | Pre-Ampere: sdpa only, and 16 GB is tight |
+
+flash-attn 2 runs on **every Ampere-or-newer card**, not just A100s — the wheel
+matrix is keyed on (CUDA, torch, python, C++ ABI), not on the GPU model.
+`scripts/install_flash_attn.sh` resolves and downloads the matching prebuilt
+wheel; it is called automatically by `setup-env.sh` on a GPU box.
+
+> Never let pip build flash-attn from source here: it compiles CUDA kernels for
+> 30–90 minutes at $/hr and frequently OOMs. If no matching wheel exists, the
+> script skips and `main.py` falls back to `sdpa`.
 
 ---
 
@@ -368,11 +379,19 @@ bash scripts/setup-env.sh
 
 ### What `setup-env.sh` Does
 
-1. Installs: `transformers==4.44.2`, `accelerate`, `datasets`, `marisa-trie`,
+1. Creates `.venv` and installs torch — the **CUDA** build when `nvidia-smi` is
+   present, the CPU build otherwise
+2. Installs: `transformers`, `accelerate`, `datasets`, `marisa-trie`,
    `networkx`, `scikit-learn`, `tiktoken`, `sentencepiece`, `protobuf`
-2. Detects Python/CUDA/PyTorch versions
-3. Tries to install **flash-attn** from pre-built wheel (A100 only)
-4. Falls back to **sdpa** if no matching wheel found (~20% slower beam search)
+3. On a GPU box, runs `install_flash_attn.sh`, which probes torch / CUDA /
+   python / C++ ABI and downloads the matching **prebuilt** flash-attn 2 wheel
+4. Falls back to **sdpa** if no matching wheel exists (~20% slower beam search)
+5. Prints whether the venv's torch actually sees the GPU
+
+> Launch the experiment with `./.venv/bin/python`, **not** `uv run`.
+> `pyproject.toml` pins torch to the CPU index for local dev, and `uv run`
+> re-syncs the project — which would replace CUDA torch with a CPU build.
+> `run_vast.sh` and `run_ablation.sh` already do this.
 
 ### Python Version Fix
 

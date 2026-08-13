@@ -54,8 +54,14 @@ CONDITIONS_BY_METHOD = {
     "v1": ["DCA_v1_Static"],
     "v2": ["DCA_v2_Dynamic"],
     "v2-nogates": ["DCA_v2_NoGates"],
+    "v3": ["DCA_v3_Lazy"],
+    "v3-nogates": ["DCA_v3_NoGates"],
     "all": ["GCR_Baseline", "DCA_v1_Static", "DCA_v2_Dynamic"],
     "ablation": ["GCR_Baseline", "DCA_v1_Static", "DCA_v2_Dynamic", "DCA_v2_NoGates"],
+    "lazy": ["GCR_Baseline", "DCA_v1_Static", "DCA_v3_Lazy"],
+    "lazy-ablation": [
+        "GCR_Baseline", "DCA_v1_Static", "DCA_v3_Lazy", "DCA_v3_NoGates",
+    ],
 }
 
 
@@ -842,6 +848,13 @@ def _run(args, output_base, gpu_name, vram_gb, capability):
                 m["total_paths_filtered"],
                 m["total_paths_all"],
                 m["reduction_pct"],
+            )
+        if "avg_candidates_materialised" in m:
+            logger.info(
+                "%15s (lazy: %.1f candidates over %.1f frontiers per question)",
+                "",
+                m["avg_candidates_materialised"],
+                m["avg_frontier_builds"],
             )
     logger.info("=" * 80)
 

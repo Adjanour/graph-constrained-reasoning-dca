@@ -19,11 +19,15 @@
 #   bash scripts/run_vast.sh --gpu A100_40GB              # different GPU
 #   bash scripts/run_vast.sh --region us                   # US hosts only
 #   bash scripts/run_vast.sh --region eu                   # EU hosts only
+#   bash scripts/run_vast.sh --run-name thesis             # named, resumable run dir
+#   bash scripts/run_vast.sh --max-hours 6                 # stop before spending more
 #
-# Split-dataset strategy (recommended to avoid losing progress):
-#   bash scripts/run_vast.sh --datasets RoG-webqsp --output-dir results/final_experiment/run1
-#   bash scripts/run_vast.sh --datasets RoG-cwq    --output-dir results/final_experiment/run1
+# Split-dataset strategy (recommended to avoid losing progress) — both runs
+# share one results dir, so a re-rented box picks up where the last one stopped:
+#   bash scripts/run_vast.sh --run-name thesis --datasets RoG-webqsp
+#   bash scripts/run_vast.sh --run-name thesis --datasets RoG-cwq
 #
+# The offer's real $/hr is passed to main.py --cost-per-hour automatically.
 # All extra arguments are forwarded to experiments/type_oracle_full/main.py.
 
 set -euo pipefail
@@ -45,6 +49,8 @@ OFFER_ID=""
 GPU_FILTER="RTX_4090"
 REGION=""
 EXPERIMENT="all"   # all | baseline | v1 | v2 | v2-nogates | ablation
+RUN_NAME="vast"    # stable results dir — a re-rented box resumes into it
+MAX_HOURS=""       # optional spend guard, forwarded to --max-runtime-hours
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -55,11 +61,18 @@ while [[ $# -gt 0 ]]; do
         --disk)    DISK_SIZE="$2"; shift 2 ;;
         --region)  REGION="$2"; shift 2 ;;
         --experiment) EXPERIMENT="$2"; shift 2 ;;
+        --run-name) RUN_NAME="$2"; shift 2 ;;
+        --max-hours) MAX_HOURS="$2"; shift 2 ;;
         --search-only) SEARCH_ONLY=1; shift ;;
-        --help|-h) head -25 "$0" | grep '^#' | sed 's/^# *//' ; exit 0 ;;
+        --help|-h) head -32 "$0" | grep '^#' | sed 's/^# *//' ; exit 0 ;;
         *)         EXTRA_ARGS+=("$1"); shift ;;
     esac
 done
+
+# An explicit --output-dir in the forwarded args wins over --run-name.
+if [[ " ${EXTRA_ARGS[*]:-} " == *" --output-dir "* ]]; then
+    RUN_NAME=""
+fi
 
 echo "========================================"
 echo "  Vast.ai DCA-Trie Orchestrator"
@@ -67,6 +80,7 @@ echo "========================================"
 echo "GPU: $GPU_FILTER  Disk: ${DISK_SIZE}GB  Region: ${REGION:-any}"
 echo "Docker: $DOCKER_IMAGE"
 echo "Experiment: $EXPERIMENT"
+echo "Run name: ${RUN_NAME:-(from --output-dir)}"
 echo "Results: $RESULTS_DIR"
 echo "Args: ${EXTRA_ARGS[*]:-none}"
 echo "========================================"
@@ -154,6 +168,9 @@ if [ -z "$OFFER_ID" ]; then
     # Show the selected offer details
     OFFER_DETAILS=$(echo "$CANDIDATES" | jq -r ".[] | select(.id == $OFFER_ID) | \"  ID: \\(.id)  Price: \\(.dph_total)/hr  Location: \\(.geolocation)  Reliability: \\(.reliability)\"")
     echo "$OFFER_DETAILS"
+    # Real price of this offer — fed to main.py --cost-per-hour so the run logs
+    # what it is actually spending.
+    DPH=$(echo "$CANDIDATES" | jq -r ".[] | select(.id == $OFFER_ID) | .dph_total // empty")
     if [ "${SEARCH_ONLY:-0}" = "1" ]; then
         echo ""
         echo "Search-only mode. Skipping rent (--search-only)"
@@ -259,11 +276,30 @@ done
 
 # ─── 6. Run the experiment ─────────────────────────────────────────
 echo ""
-echo "→ Starting experiment..."
+
+# Price of this instance, so the run can log what it is spending. Set from the
+# offer during search; recovered from the instance record when --offer was used.
+if [ -z "${DPH:-}" ]; then
+    DPH=$(echo "$CONN_INFO" | jq -r '.dph_total // empty')
+fi
+
+RUN_ARGS=(--method "$EXPERIMENT")
+[ -n "$RUN_NAME" ]  && RUN_ARGS+=(--run-name "$RUN_NAME")
+[ -n "$DPH" ]       && RUN_ARGS+=(--cost-per-hour "$DPH")
+[ -n "$MAX_HOURS" ] && RUN_ARGS+=(--max-runtime-hours "$MAX_HOURS")
+RUN_ARGS+=(${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"})
+
+echo "→ Starting experiment: main.py ${RUN_ARGS[*]}"
+
+# .venv/bin/python, NOT `uv run`: pyproject pins torch to the CPU index for
+# local dev, so `uv run` would re-sync the project and swap the CUDA build for
+# a CPU one on this GPU box. vast_boot.sh builds .venv with CUDA torch.
+# HF_HOME is set explicitly: a non-interactive ssh command does not read
+# ~/.bashrc, and the 16 GB checkpoint must not land on the small root fs.
 ssh $SSH_OPTS -p "$SSH_PORT" "root@$SSH_HOST" \
     "cd /workspace/graph-constrained-reasoning && \
-     source /venv/main/bin/activate && \
-     nohup uv run python experiments/type_oracle_full/main.py --method $EXPERIMENT ${EXTRA_ARGS[*]:-} \
+     export HF_HOME=/workspace/hf-cache && \
+     nohup ./.venv/bin/python experiments/type_oracle_full/main.py ${RUN_ARGS[*]} \
          > /workspace/experiment.log 2>&1 &"
 
 echo "→ Experiment running. Monitoring every ${POLL_EXPERIMENT}s..."
@@ -277,9 +313,33 @@ while true; do
         echo "  Experiment complete!"
         break
     fi
-    LAST_LINE=$(ssh $SSH_OPTS -p "$SSH_PORT" "root@$SSH_HOST" \
-        'tail -1 /workspace/experiment.log 2>/dev/null' || echo "...")
-    echo "  [$EXP_COUNT] $LAST_LINE"
+
+    # Died without finishing (preflight abort, OOM, CUDA error)? Say so instead
+    # of polling a dead box at $/hr.
+    if ! ssh $SSH_OPTS -p "$SSH_PORT" "root@$SSH_HOST" \
+        'pgrep -f "experiments/type_oracle_full/main.py" >/dev/null' 2>/dev/null; then
+        echo ""
+        echo "ERROR: the experiment process is gone but never finished. Last 20 log lines:"
+        ssh $SSH_OPTS -p "$SSH_PORT" "root@$SSH_HOST" \
+            'tail -20 /workspace/experiment.log' 2>/dev/null || true
+        echo ""
+        echo "Instance $INSTANCE_ID is still up — fix and rerun, or destroy it:"
+        echo "  ssh -p $SSH_PORT root@$SSH_HOST"
+        echo "  $VASTAI destroy instance $INSTANCE_ID"
+        exit 1
+    fi
+
+    # status.json is the structured heartbeat main.py keeps updated.
+    PROGRESS=$(ssh $SSH_OPTS -p "$SSH_PORT" "root@$SSH_HOST" \
+        'cat /workspace/graph-constrained-reasoning/results/final_experiment/*/status.json 2>/dev/null | tail -20' 2>/dev/null |
+        jq -r '"\(.completed_units)/\(.total_units) conditions | elapsed \(.elapsed_h)h | ETA \(.eta_h)h | $\(.est_cost_usd // 0)"' 2>/dev/null || true)
+    if [ -n "$PROGRESS" ] && [ "$PROGRESS" != "null" ]; then
+        echo "  [$EXP_COUNT] $PROGRESS"
+    else
+        LAST_LINE=$(ssh $SSH_OPTS -p "$SSH_PORT" "root@$SSH_HOST" \
+            'tail -1 /workspace/experiment.log 2>/dev/null' || echo "...")
+        echo "  [$EXP_COUNT] $LAST_LINE"
+    fi
     EXP_COUNT=$((EXP_COUNT + 1))
     sleep "$POLL_EXPERIMENT"
 done

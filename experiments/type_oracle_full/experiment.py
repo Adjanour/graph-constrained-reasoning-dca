@@ -3,7 +3,7 @@ experiment.py — Metrics, per-condition runners, and dataset-level orchestratio
 
 - ``PrepCache`` — per-question precomputed graph, oracle, paths, tokenization
 - ``compute_hits`` — Hits@1 evaluation metric
-- ``_run_baseline`` / ``_run_v1`` / ``_run_v2`` — single-sample runners
+- ``_run_baseline`` / ``_run_v1`` / ``_run_v2`` / ``_run_v3`` — single-sample runners
 - ``run_condition`` — loops over a dataset for one condition, with checkpoint/resume
 """
 
@@ -20,7 +20,7 @@ import src.utils as graph_utils
 from approach3_symbolic.type_oracle import TypeOracle
 from src.utils.qa_utils import eval_hit, extract_topk_prediction, normalize
 
-from decoding import dca_v2_generate, run_constrained_decoding
+from decoding import dca_v2_generate, run_constrained_decoding, run_lazy_decoding
 from invariants import check_all_invariants
 from trie_utils import (
     build_filtered_trie,
@@ -37,6 +37,10 @@ from utils import (
     safe_read_jsonl,
     timeout,
 )
+
+# Conditions that materialise the constraint at the frontier and so never
+# read ``PrepCache.all_paths``.
+LAZY_CONDITIONS = ("DCA_v3_Lazy", "DCA_v3_NoGates")
 
 
 # ---------------------------------------------------------------------------
@@ -62,12 +66,21 @@ class PrepCache:
     tokenized: List[List[int]]  # list of token ID sequences (no EOS yet)
 
     @classmethod
-    def build(cls, data: dict, index_len: int) -> "PrepCache":
-        """Build a PrepCache from a single question's data dict."""
+    def build(cls, data: dict, index_len: int, enumerate_paths: bool = True) -> "PrepCache":
+        """Build a PrepCache from a single question's data dict.
+
+        ``enumerate_paths=False`` skips the DFS.  The lazy conditions never
+        read ``all_paths``, and the DFS is the dominant per-question cost at
+        larger ``index_len`` — running it anyway would charge them for work
+        they exist to avoid.
+        """
         qid = data["id"]
         nx_graph = graph_utils.build_graph(data["graph"], undirected=False)
         oracle = TypeOracle.from_graph(data["graph"])
-        all_paths = graph_utils.dfs(nx_graph, data.get("q_entity", []), index_len)
+        if enumerate_paths:
+            all_paths = graph_utils.dfs(nx_graph, data.get("q_entity", []), index_len)
+        else:
+            all_paths = []
         path_strings = [graph_utils.path_to_string(p) for p in all_paths]
         return cls(
             qid=qid,
@@ -269,11 +282,17 @@ def trace_sample(data, prep, cond_name, result, answer_types=None):
     # ── Step 6: Trie Construction ──
     heading("STEP 6: Trie Construction")
     n_paths = len(prep.all_paths)
-    print(f"  Baseline trie: {n_paths} paths (all DFS paths)")
+    if cond_name not in LAZY_CONDITIONS:
+        print(f"  Baseline trie: {n_paths} paths (all DFS paths)")
     if cond_name == "DCA_v1_Static":
         print(f"  Filtered trie: built from TypeOracle-filtered paths")
     elif cond_name == "DCA_v2_Dynamic":
         print(f"  V2 tries: per-hop, 1-hop paths from head pool")
+    elif cond_name in LAZY_CONDITIONS:
+        stats = (result or {}).get("lazy_stats", {})
+        print(f"  V3 constraint: materialised on demand — "
+              f"{stats.get('candidates_materialised', 0)} candidates across "
+              f"{stats.get('frontier_builds', 0)} frontiers (no DFS)")
 
     # ── Step 7: Prediction ──
     heading("STEP 7: Prediction")
@@ -430,6 +449,35 @@ def _run_v2(model, input_builder, data, qid, cond_name, prep, index_len, max_new
     return result, True
 
 
+def _run_v3(model, input_builder, data, qid, cond_name, prep, index_len, **_kwargs):
+    """Run v3 lazy constrained decoding.  Returns (result_dict | None, trie_ok)."""
+    gates_enabled = _kwargs.get("gates_enabled", True)
+
+    answer_types = prep.oracle.infer_answer_types(data["question"])
+    if not answer_types and prep.all_paths:
+        answer_types = prep.oracle.infer_answer_types_from_paths(prep.all_paths)
+
+    prediction, _, stats = run_lazy_decoding(
+        model, input_builder, data,
+        nx_graph=prep.nx_graph,
+        oracle=prep.oracle,
+        answer_types=answer_types,
+        max_hops=index_len,
+        gates_enabled=gates_enabled,
+    )
+
+    if prediction is None:
+        logger.debug("Sample %s: v3 has no linked start entity", qid)
+        return None, False
+
+    result = _build_result_dict(
+        qid, data["question"],
+        prediction if prediction else "",
+        data["answer"], cond_name,
+        extra={"lazy_stats": stats},
+    )
+    return result, True
+
 
 # ---------------------------------------------------------------------------
 # Dataset-level orchestration
@@ -481,6 +529,8 @@ def run_condition(
         "DCA_v1_Static": _run_v1,
         "DCA_v2_Dynamic": _run_v2,
         "DCA_v2_NoGates": _run_v2,
+        "DCA_v3_Lazy": _run_v3,
+        "DCA_v3_NoGates": _run_v3,
     }
     run_fn = runners.get(cond_name)
     if run_fn is None:
@@ -495,14 +545,14 @@ def run_condition(
                 continue
 
             t_sample = time.time()
-            prep = PrepCache.build(d, index_len)
+            prep = PrepCache.build(d, index_len, enumerate_paths=cond_name not in LAZY_CONDITIONS)
 
             # Per-question graph stats
             from ablation_metrics import compute_graph_stats
             graph_stats = compute_graph_stats(prep.nx_graph, prep.all_paths)
 
             extra_kwargs = {}
-            if cond_name == "DCA_v2_NoGates":
+            if cond_name in ("DCA_v2_NoGates", "DCA_v3_NoGates"):
                 extra_kwargs["gates_enabled"] = False
             if collect_metrics:
                 extra_kwargs["collect_metrics"] = True
@@ -563,7 +613,14 @@ def run_condition(
     n = len(preds)
 
     path_info = {}
-    if cond_name == "DCA_v1_Static" and n > 0:
+    if cond_name in LAZY_CONDITIONS and n > 0:
+        cands = [p.get("lazy_stats", {}).get("candidates_materialised", 0) for p in preds]
+        fronts = [p.get("lazy_stats", {}).get("frontier_builds", 0) for p in preds]
+        path_info = {
+            "avg_candidates_materialised": round(sum(cands) / n, 1),
+            "avg_frontier_builds": round(sum(fronts) / n, 1),
+        }
+    elif cond_name == "DCA_v1_Static" and n > 0:
         total_all = sum(p.get("n_paths_all", 0) for p in preds)
         total_filt = sum(p.get("n_paths_filtered", 0) for p in preds)
         path_info = {

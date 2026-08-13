@@ -46,20 +46,39 @@ else
     cd "$REPO_DIR"
 fi
 
-# ── 2. Write .env if HF_TOKEN is set ────────────────────────────────
+# ── 3. Write .env if HF_TOKEN is set ────────────────────────────────
 if [ -n "${HF_TOKEN:-}" ]; then
     echo "HF_TOKEN=$HF_TOKEN" > "$REPO_DIR/.env"
     echo "HF_TOKEN written to .env" | tee -a "$LOG"
 fi
 
-# ── 3. Install dependencies ───────────────────────────────────────
+# ── 4. Keep the 16GB checkpoint off the small root filesystem ──────
+export HF_HOME="$WORKSPACE/hf-cache"
+mkdir -p "$HF_HOME"
+echo "HF_HOME=$HF_HOME" | tee -a "$LOG"
+
+# ── 5. Install dependencies (CUDA torch + prebuilt flash-attn) ─────
 echo "Running setup-env.sh..." | tee -a "$LOG"
 bash scripts/setup-env.sh 2>&1 | tee -a "$LOG"
 
-# ── 4. Persist environment for SSH sessions ────────────────────────
+# ── 6. Verify the venv actually sees the GPU ───────────────────────
+# .venv/bin/python is what run_vast.sh launches; `uv run` would re-sync the
+# project and swap in the CPU torch pinned in pyproject.toml.
+"$REPO_DIR/.venv/bin/python" - 2>&1 <<'PYEOF' | tee -a "$LOG"
+import torch
+
+print(f"venv torch {torch.__version__}, CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"venv GPU: {torch.cuda.get_device_name(0)}")
+else:
+    print("ERROR: .venv has no CUDA torch — the experiment would abort at preflight.")
+PYEOF
+
+# ── 7. Persist environment for SSH sessions ────────────────────────
+echo "export HF_HOME=$HF_HOME" >> /root/.bashrc 2>/dev/null || true
 env >> /etc/environment 2>/dev/null || true
 
-# ── 5. Signal completion ───────────────────────────────────────────
+# ── 8. Signal completion ───────────────────────────────────────────
 echo "" | tee -a "$LOG"
 echo "========================================" | tee -a "$LOG"
 echo "Setup complete — $(date)"               | tee -a "$LOG"

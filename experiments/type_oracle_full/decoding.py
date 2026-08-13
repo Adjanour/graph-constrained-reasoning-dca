@@ -73,6 +73,41 @@ def run_constrained_decoding(model, input_builder, data, trie):
 
 
 # ---------------------------------------------------------------------------
+# Run lazy constrained decoding (v3)
+# ---------------------------------------------------------------------------
+
+def run_lazy_decoding(
+    model, input_builder, data, nx_graph, oracle, answer_types, max_hops,
+    gates_enabled: bool = True,
+):
+    """Run graph-constrained decoding against a lazily materialised constraint.
+
+    Identical to ``run_constrained_decoding`` except that the trie is replaced
+    by a :class:`LazyGraphConstraint`, which expands the graph at the frontier
+    the beams actually reach.  One ``generate()`` call, one probability space,
+    and the model still chooses where to emit ``</PATH>``.
+    """
+    from lazy_constraint import LazyGraphConstraint
+
+    constraint = LazyGraphConstraint(
+        tokenizer=model.tokenizer,
+        nx_graph=nx_graph,
+        start_entities=data.get("q_entity", []),
+        oracle=oracle,
+        answer_types=answer_types,
+        max_hops=max_hops,
+        gates_enabled=gates_enabled,
+    )
+    if not constraint.start_entities:
+        return None, [], {}
+
+    prediction, ground_paths = run_constrained_decoding(
+        model, input_builder, data, constraint
+    )
+    return prediction, ground_paths, constraint.stats()
+
+
+# ---------------------------------------------------------------------------
 # Helper: collect gated paths from a head entity
 # ---------------------------------------------------------------------------
 
