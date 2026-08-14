@@ -56,11 +56,17 @@ CONDITIONS_BY_METHOD = {
     "v2-nogates": ["DCA_v2_NoGates"],
     "v3": ["DCA_v3_Lazy"],
     "v3-nogates": ["DCA_v3_NoGates"],
+    "v4": ["DCA_v4_Chain"],
+    "v4-nogates": ["DCA_v4_ChainNoGates"],
     "all": ["GCR_Baseline", "DCA_v1_Static", "DCA_v2_Dynamic"],
     "ablation": ["GCR_Baseline", "DCA_v1_Static", "DCA_v2_Dynamic", "DCA_v2_NoGates"],
     "lazy": ["GCR_Baseline", "DCA_v1_Static", "DCA_v3_Lazy"],
     "lazy-ablation": [
         "GCR_Baseline", "DCA_v1_Static", "DCA_v3_Lazy", "DCA_v3_NoGates",
+    ],
+    "v4-ablation": [
+        "GCR_Baseline", "DCA_v1_Static", "DCA_v3_Lazy",
+        "DCA_v4_Chain", "DCA_v4_ChainNoGates",
     ],
 }
 

@@ -108,6 +108,42 @@ def run_lazy_decoding(
 
 
 # ---------------------------------------------------------------------------
+# Run well-formed chain decoding (v4 / DoG merge)
+# ---------------------------------------------------------------------------
+
+def run_chain_decoding(
+    model, input_builder, data, nx_graph, oracle, answer_types, max_hops,
+    gates_enabled: bool = True,
+):
+    """Run single-pass decoding constrained to DoG-style well-formed chains.
+
+    The constraint is a :class:`WellFormedChainConstraint`: the model emits a
+    chain of explicitly numbered triples ``N. < head -> rel -> tail >`` where
+    each head is the question topic or a previously mentioned entity (the head
+    pool).  One ``generate()`` call, one probability space, and the model still
+    chooses where to emit ``</PATH>``.
+    """
+    from lazy_constraint import WellFormedChainConstraint
+
+    constraint = WellFormedChainConstraint(
+        tokenizer=model.tokenizer,
+        nx_graph=nx_graph,
+        start_entities=data.get("q_entity", []),
+        oracle=oracle,
+        answer_types=answer_types,
+        max_hops=max_hops,
+        gates_enabled=gates_enabled,
+    )
+    if not constraint.start_entities:
+        return None, [], {}
+
+    prediction, ground_paths = run_constrained_decoding(
+        model, input_builder, data, constraint
+    )
+    return prediction, ground_paths, constraint.stats()
+
+
+# ---------------------------------------------------------------------------
 # Helper: collect gated paths from a head entity
 # ---------------------------------------------------------------------------
 

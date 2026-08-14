@@ -20,7 +20,12 @@ import src.utils as graph_utils
 from approach3_symbolic.type_oracle import TypeOracle
 from src.utils.qa_utils import eval_hit, extract_topk_prediction, normalize
 
-from decoding import dca_v2_generate, run_constrained_decoding, run_lazy_decoding
+from decoding import (
+    dca_v2_generate,
+    run_chain_decoding,
+    run_constrained_decoding,
+    run_lazy_decoding,
+)
 from invariants import check_all_invariants
 from trie_utils import (
     build_filtered_trie,
@@ -40,7 +45,7 @@ from utils import (
 
 # Conditions that materialise the constraint at the frontier and so never
 # read ``PrepCache.all_paths``.
-LAZY_CONDITIONS = ("DCA_v3_Lazy", "DCA_v3_NoGates")
+LAZY_CONDITIONS = ("DCA_v3_Lazy", "DCA_v3_NoGates", "DCA_v4_Chain", "DCA_v4_ChainNoGates")
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +484,36 @@ def _run_v3(model, input_builder, data, qid, cond_name, prep, index_len, **_kwar
     return result, True
 
 
+def _run_v4(model, input_builder, data, qid, cond_name, prep, index_len, **_kwargs):
+    """Run v4 well-formed chain decoding (DoG merge)."""
+    gates_enabled = _kwargs.get("gates_enabled", True)
+
+    answer_types = prep.oracle.infer_answer_types(data["question"])
+    if not answer_types and prep.all_paths:
+        answer_types = prep.oracle.infer_answer_types_from_paths(prep.all_paths)
+
+    prediction, _, stats = run_chain_decoding(
+        model, input_builder, data,
+        nx_graph=prep.nx_graph,
+        oracle=prep.oracle,
+        answer_types=answer_types,
+        max_hops=index_len,
+        gates_enabled=gates_enabled,
+    )
+
+    if prediction is None:
+        logger.debug("Sample %s: v4 has no linked start entity", qid)
+        return None, False
+
+    result = _build_result_dict(
+        qid, data["question"],
+        prediction if prediction else "",
+        data["answer"], cond_name,
+        extra={"lazy_stats": stats},
+    )
+    return result, True
+
+
 # ---------------------------------------------------------------------------
 # Dataset-level orchestration
 # ---------------------------------------------------------------------------
@@ -531,6 +566,8 @@ def run_condition(
         "DCA_v2_NoGates": _run_v2,
         "DCA_v3_Lazy": _run_v3,
         "DCA_v3_NoGates": _run_v3,
+        "DCA_v4_Chain": _run_v4,
+        "DCA_v4_ChainNoGates": _run_v4,
     }
     run_fn = runners.get(cond_name)
     if run_fn is None:
@@ -552,7 +589,7 @@ def run_condition(
             graph_stats = compute_graph_stats(prep.nx_graph, prep.all_paths)
 
             extra_kwargs = {}
-            if cond_name in ("DCA_v2_NoGates", "DCA_v3_NoGates"):
+            if cond_name in ("DCA_v2_NoGates", "DCA_v3_NoGates", "DCA_v4_ChainNoGates"):
                 extra_kwargs["gates_enabled"] = False
             if collect_metrics:
                 extra_kwargs["collect_metrics"] = True

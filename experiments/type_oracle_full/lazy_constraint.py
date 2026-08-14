@@ -41,6 +41,213 @@ from utils import PATH_START, PATH_END, logger
 TokenSeq = Tuple[int, ...]
 
 
+# ---------------------------------------------------------------------------
+# Well-formed chain constraint (DCA v4 / DoG merge)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ChainAnchor:
+    """Confirmed state at a step boundary: everything up to a completed triple."""
+
+    text: str                  # path text so far, without the <PATH> sentinel
+    head_pool: FrozenSet[str]  # entities that may start the next triple
+    step: int                  # number of the next step to emit (1-based)
+    last_tail: Optional[str]   # tail of the most recent triple; None at the root
+
+
+@dataclass
+class ChainFrontier:
+    """The materialised continuations available from one chain anchor."""
+
+    trie: Trie
+    complete: Dict[TokenSeq, Optional[ChainAnchor]]
+    n_candidates: int
+
+
+class WellFormedChainConstraint:
+    """DoG-style well-formed chain constraint, materialised lazily.
+
+    The model emits a chain of explicitly numbered triples rather than a single
+    linear path::
+
+        <PATH>1. < Alice -> spouse -> Bob > 2. < Bob -> profession -> Physicist > ...
+        </PATH>
+
+    Every entity mentioned in a step must be the question topic or an entity
+    already mentioned (the *head pool*).  This is DoG's well-formed chain
+    principle~\citep{li2024-decoding-on-graphs}.  Unlike the linear
+    :class:`LazyGraphConstraint`, the head of a triple can be *any* entity in the
+    pool, so the decoder can jump back to an earlier entity instead of being
+    forced to continue from the last one.  The pool grows monotonically, so the
+    constraint never needs rebuilding: a step boundary simply unions in the new
+    frontier, preserving the single probability space that distinguishes v3 from
+    the step-wise v2.
+
+    As with :class:`LazyGraphConstraint`, nothing beyond the visited frontier is
+    ever enumerated, and the TypeOracle gates move with the frontier
+    (``range_gate`` prunes edges, ``type_gate`` decides where the chain may end).
+
+    NOTE on the description phase: DoG interleaves constrained triples with free
+    ``This tells us ...`` text.  A single-pass constrained decode cannot offer
+    unconstrained tokens inside the constrained region, so this implementation
+    emits a pure chain of triples.  The answer is generated as free text after
+    ``</PATH>`` exactly as in the baseline, and the answer entity is expected to
+    appear as the tail of one of the chain's triples.
+    """
+
+    def __init__(
+        self,
+        tokenizer,
+        nx_graph,
+        start_entities: Sequence[str],
+        oracle,
+        answer_types: FrozenSet[str],
+        max_hops: int,
+        gates_enabled: bool = True,
+    ):
+        self.tokenizer = tokenizer
+        self.graph = nx_graph
+        self.start_entities = [e for e in start_entities if e in nx_graph]
+        self.oracle = oracle
+        self.answer_types = answer_types
+        self.max_hops = max_hops
+        self.gates_enabled = gates_enabled
+
+        self._root = ChainAnchor(
+            text="",
+            head_pool=frozenset(self.start_entities),
+            step=1,
+            last_tail=None,
+        )
+
+        self._frontiers: Dict[ChainAnchor, ChainFrontier] = {}
+        self._anchor_of: Dict[TokenSeq, ChainAnchor] = {(): self._root}
+        self._anchor_lengths: Set[int] = {0}
+
+        self.n_frontier_builds = 0
+        self.n_candidates_materialised = 0
+
+    def get(self, prefix_sequence: List[int]) -> List[int]:
+        prefix = tuple(prefix_sequence)
+        allowed: Set[int] = set()
+        seen: Set[ChainAnchor] = set()
+        pending = self._anchor_chain(prefix)
+
+        while pending:
+            anchor = pending.pop()
+            if anchor in seen:
+                continue
+            seen.add(anchor)
+
+            frontier = self._frontier(anchor)
+            allowed |= set(frontier.trie.get(prefix_sequence))
+
+            if prefix in frontier.complete:
+                next_anchor = frontier.complete[prefix]
+                if next_anchor is not None:
+                    self._anchor_of.setdefault(prefix, next_anchor)
+                    self._anchor_lengths.add(len(prefix))
+                    pending.append(next_anchor)
+
+        if not allowed:
+            logger.warning("chain constraint: no continuation for a %d-token prefix",
+                           len(prefix))
+        return list(allowed)
+
+    def _anchor_chain(self, prefix: TokenSeq) -> List[ChainAnchor]:
+        chain = [self._root]
+        for length in sorted(self._anchor_lengths):
+            if length == 0 or length >= len(prefix):
+                continue
+            anchor = self._anchor_of.get(prefix[:length])
+            if anchor is not None:
+                chain.append(anchor)
+        return chain
+
+    def _frontier(self, anchor: ChainAnchor) -> ChainFrontier:
+        cached = self._frontiers.get(anchor)
+        if cached is not None:
+            return cached
+
+        options: List[Tuple[str, Optional[ChainAnchor]]] = []
+
+        if anchor.step <= self.max_hops:
+            for head in anchor.head_pool:
+                for rel, nbr in self._gated_edges(head):
+                    text = f"{anchor.step}. < {head} -> {rel} -> {nbr} >"
+                    options.append((text, self._advance(anchor, text, nbr)))
+        else:
+            options = []
+
+        # Close option: legal whenever the last triple's tail is a legal answer
+        # (or unconditionally when no step remains, so the constraint never hands
+        # back an empty set and silently falls back to unconstrained decoding).
+        if options and self._may_close(anchor):
+            options.append((PATH_END, None))
+        elif not options and anchor.text:
+            options.append((PATH_END, None))
+
+        sequences: List[List[int]] = []
+        complete: Dict[TokenSeq, Optional[ChainAnchor]] = {}
+
+        for text, next_anchor in options:
+            full = f"{PATH_START}{anchor.text}{text}"
+            ids = self.tokenizer(full, add_special_tokens=False).input_ids
+            if next_anchor is None:
+                ids = ids + [self.tokenizer.eos_token_id]
+            sequences.append(ids)
+            complete[tuple(ids if next_anchor is not None else ids[:-1])] = next_anchor
+
+        frontier = ChainFrontier(
+            trie=Trie(sequences),
+            complete=complete,
+            n_candidates=len(options),
+        )
+        self._frontiers[anchor] = frontier
+        self.n_frontier_builds += 1
+        self.n_candidates_materialised += len(options)
+        return frontier
+
+    def _advance(self, anchor: ChainAnchor, text: str, entity: str) -> ChainAnchor:
+        return ChainAnchor(
+            text=anchor.text + text,
+            head_pool=frozenset(anchor.head_pool | {entity}),
+            step=anchor.step + 1,
+            last_tail=entity,
+        )
+
+    def _gated_edges(self, head: str):
+        if head not in self.graph:
+            return
+        for nbr in self.graph.neighbors(head):
+            rel = self.graph[head][nbr]["relation"]
+            if self.gates_enabled and not self.oracle.range_gate(rel, nbr):
+                continue
+            yield rel, nbr
+
+    def _may_close(self, anchor: ChainAnchor) -> bool:
+        """Whether the chain may legally terminate at *anchor*.
+
+        The answer is the tail of the most recent triple.  ``type_gate`` takes
+        its terminal branch: the question is whether that entity is an
+        admissible answer, not whether it sits at depth ``max_hops``.
+        """
+        if not self.gates_enabled:
+            return True
+        if anchor.last_tail is None:
+            return False
+        return self.oracle.type_gate(
+            anchor.last_tail, self.answer_types, anchor.step, anchor.step
+        )
+
+    def stats(self) -> dict:
+        return {
+            "frontier_builds": self.n_frontier_builds,
+            "candidates_materialised": self.n_candidates_materialised,
+            "anchors_visited": len(self._anchor_of),
+        }
+
+
 @dataclass(frozen=True)
 class Anchor:
     """A confirmed position in the path: everything up to an entity boundary."""
