@@ -35,6 +35,11 @@ source .venv/bin/activate
 # torch to the CPU index for local dev. `uv run` does NOT — it re-syncs the
 # project and would replace CUDA torch with the CPU build. On a GPU box always
 # launch through .venv/bin/python, never `uv run`.
+#
+# The pin only holds on uv < 0.12: uv 0.12+ honours [tool.uv.sources] even
+# through `uv pip install`, silently pulling the CPU wheel again.  `--no-project`
+# makes the behaviour version-independent — the wheel is chosen explicitly here,
+# not by the project file.
 if [ -n "${FORCE_CPU:-}" ]; then
     GPU_BOX=""
 elif [ -n "${FORCE_GPU:-}" ] || command -v nvidia-smi &>/dev/null; then
@@ -49,10 +54,10 @@ if [ -n "$GPU_BOX" ]; then
     # months (torch 2.10 has cp312 wheels only). Raise this once the matrix
     # catches up — see scripts/install_flash_attn.sh.
     echo "Installing torch (CUDA — nvidia-smi found)..."
-    uv pip install "torch>=2.6,<2.9"
+    uv pip install --no-project "torch>=2.6,<2.9"
 else
     echo "Installing torch (CPU)..."
-    uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+    uv pip install --no-project torch --index-url https://download.pytorch.org/whl/cpu
 fi
 
 # Install everything else
