@@ -37,7 +37,7 @@ source .venv/bin/activate
 # launch through .venv/bin/python, never `uv run`.
 #
 # The pin only holds on uv < 0.12: uv 0.12+ honours [tool.uv.sources] even
-# through `uv pip install`, silently pulling the CPU wheel again.  `--no-project`
+# through `uv pip install`, silently pulling the CPU wheel again.  `--no-config`
 # makes the behaviour version-independent — the wheel is chosen explicitly here,
 # not by the project file.
 if [ -n "${FORCE_CPU:-}" ]; then
@@ -54,10 +54,10 @@ if [ -n "$GPU_BOX" ]; then
     # months (torch 2.10 has cp312 wheels only). Raise this once the matrix
     # catches up — see scripts/install_flash_attn.sh.
     echo "Installing torch (CUDA — nvidia-smi found)..."
-    uv pip install --no-project "torch>=2.6,<2.9"
+    uv pip install --no-config "torch>=2.6,<2.9"
 else
     echo "Installing torch (CPU)..."
-    uv pip install --no-project torch --index-url https://download.pytorch.org/whl/cpu
+    uv pip install --no-config torch --index-url https://download.pytorch.org/whl/cpu
 fi
 
 # Install everything else
