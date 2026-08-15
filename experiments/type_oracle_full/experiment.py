@@ -123,6 +123,21 @@ class PrepCache:
         Filters all_paths through TypeOracle gates, then tokenizes only
         the surviving paths.
         """
+        filtered_paths = self._filtered_paths(answer_types)
+
+        if not filtered_paths:
+            return [], filtered_paths
+
+        filtered_strs = [graph_utils.path_to_string(p) for p in filtered_paths]
+        wrapped = [f"{PATH_START}{s}{PATH_END}" for s in filtered_strs]
+        tokenized = tokenizer(
+            wrapped, padding=False, add_special_tokens=False
+        ).input_ids
+        eos = tokenizer.eos_token_id
+        return [ids + [eos] for ids in tokenized], filtered_paths
+
+    def _filtered_paths(self, answer_types) -> List[list]:
+        """Apply the deployed v1 gates (range gate every hop, type gate terminal)."""
         filtered_paths = []
         for p in self.all_paths:
             admit = True
@@ -138,6 +153,55 @@ class PrepCache:
                     admit = False
             if admit:
                 filtered_paths.append(p)
+        return filtered_paths
+
+    def get_gold_relevant_token_ids(
+        self, tokenizer
+    ) -> Tuple[List[List[int]], List[list]]:
+        """E1: keep only paths whose terminal entity is a gold answer entity.
+
+        This is the *perfect relevance filter* — the oracle upper bound on
+        ``filtering irrelevant paths helps accuracy''.  It removes every
+        path that cannot be correct and keeps every path that can be, so
+        it measures what relevance filtering *could* achieve at decode time
+        (subject to the answer being reachable within ``index_len`` hops).
+        """
+        gold_entities = set(self.data.get("a_entity", []))
+        filtered_paths = [p for p in self.all_paths if p and p[-1][2] in gold_entities]
+
+        if not filtered_paths:
+            return [], filtered_paths
+
+        filtered_strs = [graph_utils.path_to_string(p) for p in filtered_paths]
+        wrapped = [f"{PATH_START}{s}{PATH_END}" for s in filtered_strs]
+        tokenized = tokenizer(
+            wrapped, padding=False, add_special_tokens=False
+        ).input_ids
+        eos = tokenizer.eos_token_id
+        return [ids + [eos] for ids in tokenized], filtered_paths
+
+    def get_gold_type_token_ids(
+        self, tokenizer
+    ) -> Tuple[List[List[int]], List[list]]:
+        """E2: keep only paths whose terminal passes a gate over *gold-derived*
+        answer types.
+
+        Answer types are mined from the gold answer entities (``a_entity``),
+        not from a question regex — this is what a correct, complete ontology
+        would provide.  It tests whether *type* constraints help at all when
+        the types are right (FNR ~ 0 by construction: every gold terminal's
+        own types are in the gate set).  No range gate: isolates the type lever.
+        """
+        gold_types = set()
+        for ent in self.data.get("a_entity", []):
+            gold_types |= set(self.oracle.get_types(ent))
+        if not gold_types:
+            return [], self.all_paths  # no known types -> admit all (fallback)
+
+        filtered_paths = [
+            p for p in self.all_paths
+            if p and self.oracle.type_gate(p[-1][2], gold_types, len(p), len(p))
+        ]
 
         if not filtered_paths:
             return [], filtered_paths
@@ -419,6 +483,66 @@ def _run_v1(model, input_builder, data, qid, cond_name, prep, **_kwargs):
     return result, True
 
 
+def _run_gold_relevant(model, input_builder, data, qid, cond_name, prep, **_kwargs):
+    """E1: decode over a trie restricted to gold-relevant paths (oracle upper bound).
+
+    Tests ``filtering irrelevant paths helps accuracy'' at decode time: every
+    surviving path terminates in a gold answer entity, so any completed path
+    the model emits is a correct answer.  Hits@1 here is the ceiling that a
+    perfect relevance filter achieves, gated only by reachability.
+    """
+    token_ids, filtered_paths = prep.get_gold_relevant_token_ids(model.tokenizer)
+    if not token_ids:
+        logger.debug("Sample %s: no trie for E1 (gold answer unreachable in %d hops)",
+                     qid, len(prep.all_paths[0]) if prep.all_paths else 2)
+        return None, False
+
+    trie = build_trie_from_token_ids(model.tokenizer, token_ids)
+    if trie is None:
+        return None, False
+
+    prediction, _ = run_constrained_decoding(model, input_builder, data, trie)
+    result = _build_result_dict(
+        qid, data["question"],
+        prediction if prediction else "",
+        data["answer"], cond_name,
+        extra={
+            "n_paths_all": len(prep.all_paths),
+            "n_paths_filtered": len(filtered_paths),
+        },
+    )
+    return result, True
+
+
+def _run_gold_types(model, input_builder, data, qid, cond_name, prep, **_kwargs):
+    """E2: decode over a trie gated by *gold-derived* answer types.
+
+    Types come from the gold answer entities (a correct ontology oracle), not
+    from the question regex.  Tests whether the *type lever* helps when the
+    types are right.  FNR ~ 0 by construction.
+    """
+    token_ids, filtered_paths = prep.get_gold_type_token_ids(model.tokenizer)
+    if not token_ids:
+        logger.debug("Sample %s: no trie for E2 (gold-derived type gate emptied it)", qid)
+        return None, False
+
+    trie = build_trie_from_token_ids(model.tokenizer, token_ids)
+    if trie is None:
+        return None, False
+
+    prediction, _ = run_constrained_decoding(model, input_builder, data, trie)
+    result = _build_result_dict(
+        qid, data["question"],
+        prediction if prediction else "",
+        data["answer"], cond_name,
+        extra={
+            "n_paths_all": len(prep.all_paths),
+            "n_paths_filtered": len(filtered_paths),
+        },
+    )
+    return result, True
+
+
 def _run_v2(model, input_builder, data, qid, cond_name, prep, index_len, max_new_tokens, beam_size=5, **_kwargs):
     """Run v2 dynamic type-oracle.  Returns (result_dict | None, trie_ok)."""
     gates_enabled = _kwargs.get("gates_enabled", True)
@@ -568,6 +692,8 @@ def run_condition(
         "DCA_v3_NoGates": _run_v3,
         "DCA_v4_Chain": _run_v4,
         "DCA_v4_ChainNoGates": _run_v4,
+        "E1_GoldRelevant": _run_gold_relevant,
+        "E2_GoldTypes": _run_gold_types,
     }
     run_fn = runners.get(cond_name)
     if run_fn is None:
@@ -664,6 +790,15 @@ def run_condition(
             "total_paths_all": total_all,
             "total_paths_filtered": total_filt,
             "reduction_pct": round((1 - total_filt / max(1, total_all)) * 100, 1),
+        }
+    elif cond_name in ("E1_GoldRelevant", "E2_GoldTypes") and n > 0:
+        total_all = sum(p.get("n_paths_all", 0) for p in preds)
+        total_filt = sum(p.get("n_paths_filtered", 0) for p in preds)
+        path_info = {
+            "total_paths_all": total_all,
+            "total_paths_filtered": total_filt,
+            "reduction_pct": round((1 - total_filt / max(1, total_all)) * 100, 1),
+            "n_empty_tries": sum(1 for p in preds if p.get("prediction") == ""),
         }
 
     metrics = {

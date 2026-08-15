@@ -38,7 +38,7 @@ import torch  # noqa: E402
 from datasets import load_dataset  # noqa: E402
 from experiment import run_condition  # noqa: E402
 
-from src.llms import get_registed_model  # noqa: E402
+from src.llms import GraphConstrainedDecodingModel  # noqa: E402
 from src.qa_prompt_builder import PathGenerationWithAnswerPromptBuilder  # noqa: E402
 from utils import logger  # noqa: E402
 
@@ -69,6 +69,12 @@ CONDITIONS_BY_METHOD = {
         "GCR_Baseline", "DCA_v1_Static", "DCA_v3_Lazy",
         "DCA_v4_Chain", "DCA_v4_ChainNoGates",
     ],
+    # Premise test (E1/E2): does filtering by relevance / by correct types help?
+    #   GCR_Baseline    — unfiltered trie (control)
+    #   E1_GoldRelevant — keep only paths whose terminal is a gold answer entity
+    #   E2_GoldTypes    — keep only paths whose terminal passes gold-derived types
+    "premise": ["GCR_Baseline", "E1_GoldRelevant", "E2_GoldTypes"],
+    "premise-v1": ["GCR_Baseline", "DCA_v1_Static", "E1_GoldRelevant", "E2_GoldTypes"],
 }
 
 
@@ -433,7 +439,9 @@ def _load_dataset_with_retry(repo: str, split: str, attempts: int = 3):
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="DCA-Trie full experiment")
-    parser.add_argument("--model-path", default="rmanluo/GCR-Meta-Llama-3.1-8B-Instruct")
+    parser.add_argument("--model-path", nargs="+", default=["rmanluo/GCR-Meta-Llama-3.1-8B-Instruct"],
+                        help="One or more HF checkpoints. With several, each is loaded "
+                             "and run in sequence, writing to its own subdirectory.")
     parser.add_argument("--data-path", default="rmanluo")
     parser.add_argument(
         "--datasets",
@@ -621,8 +629,18 @@ def _cost_note(elapsed_s: float, cost_per_hour: float) -> str:
     return f" | ~${elapsed_s / 3600 * cost_per_hour:.2f} spent"
 
 
+def _model_slug(model_path: str) -> str:
+    """Filesystem-safe identifier for a model checkpoint path."""
+    return model_path.replace("/", "__").replace(":", "_")
+
+
 def _run(args, output_base, gpu_name, vram_gb, capability):
-    """Core experiment logic (called inside the lock)."""
+    """Core experiment logic (called inside the lock).
+
+    With multiple ``--model-path`` values the model loop is the outer loop:
+    each model is loaded once, runs every dataset x condition, and writes its
+    own config/summary/predictions under ``output_base/<model-slug>/``.
+    """
     logger.info("DCA-Trie experiment start — output: %s", output_base)
 
     _set_seeds(args.seed)
@@ -630,8 +648,10 @@ def _run(args, output_base, gpu_name, vram_gb, capability):
 
     attn_impl = _resolve_attn_impl(args.attn_impl, capability)
 
-    config = {
-        "model_path": args.model_path,
+    model_paths = args.model_path if isinstance(args.model_path, (list, tuple)) else [args.model_path]
+
+    base_config = {
+        "model_paths": model_paths,
         "data_path": args.data_path,
         "datasets": args.datasets,
         "split": args.split,
@@ -656,237 +676,263 @@ def _run(args, output_base, gpu_name, vram_gb, capability):
         **_package_versions(),
         **_git_provenance(),
     }
-    _write_json(output_base / "config.json", config)
+    _write_json(output_base / "config.json", base_config)
 
     logger.info("Configuration:")
-    for k, v in config.items():
+    for k, v in base_config.items():
         logger.info("  %-22s %s", k, v)
 
-    # -Load model ----
-    logger.info("Loading %s ...", args.model_path)
-    llm_cls = get_registed_model(args.model_path)
-    model_args_ns = argparse.Namespace(
-        model_path=args.model_path,
-        model_name=args.model_path,
-        k=args.k,
-        generation_mode=args.gen_mode,
-        attn_implementation=attn_impl,
-        max_new_tokens=args.max_new_tokens,
-        maximun_token=4096,
-        dtype=args.dtype,
-        quant=args.quant,
-        chat_model=True,
-        use_assistant_model=False,
-    )
-    t_load = time.time()
-    model = llm_cls(model_args_ns)
-    model.prepare_for_inference()
-    model.generation_cfg.temperature = None
-    model.generation_cfg.top_p = None
-    model.generation_cfg.top_k = None
-    model.model.generation_config.temperature = None
-    model.model.generation_config.top_p = None
-    model.model.generation_config.top_k = None
-    logger.info("Model loaded in %.1fs", time.time() - t_load)
-    if torch.cuda.is_available():
-        logger.info("VRAM after load: %.1f / %.1f GB", torch.cuda.memory_allocated() / 1e9, vram_gb)
-
-    input_builder = PathGenerationWithAnswerPromptBuilder(
-        model.tokenizer, args.prompt_mode, index_path_length=args.index_len
-    )
-
     conditions = CONDITIONS_BY_METHOD[args.method]
+    total_models = len(model_paths)
+    t_total = time.time()
 
-    t_start = time.time()
-    budget_s = args.max_runtime_hours * 3600
-    total_units = len(args.datasets) * len(conditions)
-    done_units = 0
-    all_summary = {}
-    stopped_early = None
+    for m_idx, model_path in enumerate(model_paths, start=1):
+        model_dir = output_base / _model_slug(model_path)
+        model_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("=" * 80)
+        logger.info("  MODEL %d/%d: %s", m_idx, total_models, model_path)
+        logger.info("=" * 80)
 
-    _write_status(
-        output_base,
-        state="running",
-        pid=os.getpid(),
-        host=socket.gethostname(),
-        total_units=total_units,
-        completed_units=0,
-    )
+        config = {**base_config, "model_path": model_path}
+        _write_json(model_dir / "config.json", config)
 
-    for ds_name in args.datasets:
-        if stopped_early:
-            break
-        logger.info("=" * 60)
-        logger.info("  DATASET: %s", ds_name)
-        logger.info("=" * 60)
-        try:
-            dataset = _load_dataset_with_retry(f"{args.data_path}/{ds_name}", args.split)
-        except Exception as exc:
-            logger.error(
-                "Could not load %s/%s — skipping dataset: %s", args.data_path, ds_name, exc
+        # -Load model ----
+        logger.info("Loading %s ...", model_path)
+        llm_cls = GraphConstrainedDecodingModel
+        model_args_ns = argparse.Namespace(
+            model_path=model_path,
+            model_name=model_path,
+            k=args.k,
+            generation_mode=args.gen_mode,
+            attn_implementation=attn_impl,
+            max_new_tokens=args.max_new_tokens,
+            maximun_token=4096,
+            dtype=args.dtype,
+            quant=args.quant,
+            chat_model=True,
+            use_assistant_model=False,
+        )
+        t_load = time.time()
+        model = llm_cls(model_args_ns)
+        model.prepare_for_inference()
+        model.generation_cfg.temperature = None
+        model.generation_cfg.top_p = None
+        model.generation_cfg.top_k = None
+        model.model.generation_config.temperature = None
+        model.model.generation_config.top_p = None
+        model.model.generation_config.top_k = None
+        logger.info("Model loaded in %.1fs", time.time() - t_load)
+        if torch.cuda.is_available():
+            logger.info(
+                "VRAM after load: %.1f / %.1f GB", torch.cuda.memory_allocated() / 1e9, vram_gb
             )
-            total_units -= len(conditions)  # keep the ETA honest
-            continue
 
-        if args.max_samples and args.max_samples < len(dataset):
-            dataset = dataset.select(range(args.max_samples))
-        logger.info("  Samples: %d", len(dataset))
-        ds_dir = output_base / ds_name
-        ds_dir.mkdir(exist_ok=True)
+        input_builder = PathGenerationWithAnswerPromptBuilder(
+            model.tokenizer, args.prompt_mode, index_path_length=args.index_len
+        )
 
-        for cond in conditions:
-            elapsed_total = time.time() - t_start
-            if budget_s and elapsed_total > budget_s:
-                stopped_early = "runtime budget exhausted"
-                logger.warning(
-                    "Runtime budget of %.2fh reached — stopping before %s/%s.%s",
-                    args.max_runtime_hours,
-                    ds_name,
-                    cond,
+        t_start = time.time()
+        budget_s = args.max_runtime_hours * 3600
+        total_units = len(args.datasets) * len(conditions)
+        done_units = 0
+        all_summary = {}
+        stopped_early = None
+
+        _write_status(
+            model_dir,
+            state="running",
+            pid=os.getpid(),
+            host=socket.gethostname(),
+            total_units=total_units,
+            completed_units=0,
+            model=model_path,
+        )
+
+        for ds_name in args.datasets:
+            if stopped_early:
+                break
+            logger.info("-" * 60)
+            logger.info("  DATASET: %s", ds_name)
+            logger.info("-" * 60)
+            try:
+                dataset = _load_dataset_with_retry(f"{args.data_path}/{ds_name}", args.split)
+            except Exception as exc:
+                logger.error(
+                    "Could not load %s/%s — skipping dataset: %s", args.data_path, ds_name, exc
+                )
+                total_units -= len(conditions)  # keep the ETA honest
+                continue
+
+            if args.max_samples and args.max_samples < len(dataset):
+                dataset = dataset.select(range(args.max_samples))
+            logger.info("  Samples: %d", len(dataset))
+            ds_dir = model_dir / ds_name
+            ds_dir.mkdir(exist_ok=True)
+
+            for cond in conditions:
+                elapsed_total = time.time() - t_start
+                if budget_s and elapsed_total > budget_s:
+                    stopped_early = "runtime budget exhausted"
+                    logger.warning(
+                        "Runtime budget of %.2fh reached — stopping before %s/%s.%s",
+                        args.max_runtime_hours,
+                        ds_name,
+                        cond,
+                        _cost_note(elapsed_total, args.cost_per_hour),
+                    )
+                    break
+
+                logger.info("  Running %s ...", cond)
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.reset_peak_memory_stats()
+
+                try:
+                    metrics = run_condition(
+                        model=model,
+                        input_builder=input_builder,
+                        dataset=dataset,
+                        cond_name=cond,
+                        ds_dir=ds_dir,
+                        force_rerun=args.force_rerun,
+                        index_len=args.index_len,
+                        max_new_tokens=args.max_new_tokens,
+                        sample_timeout_s=args.sample_timeout,
+                        beam_size=args.beam_size,
+                        trace=args.trace,
+                        collect_metrics=args.collect_metrics,
+                    )
+                except KeyboardInterrupt:
+                    _write_summary(model_dir, all_summary)
+                    raise
+                except Exception:
+                    # One broken condition must not cost the whole rental.
+                    logger.exception(
+                        "Condition %s on %s failed — continuing with the rest", cond, ds_name
+                    )
+                    metrics = {
+                        "condition": cond,
+                        "n": 0,
+                        "hits": 0,
+                        "hit_at_1": 0.0,
+                        "time_s": 0,
+                        "n_dead_ends": 0,
+                        "n_skipped": 0,
+                        "error": "see run.log",
+                    }
+
+                if torch.cuda.is_available():
+                    metrics["peak_vram_gb"] = round(torch.cuda.max_memory_allocated() / 1e9, 2)
+
+                all_summary[(ds_name, cond)] = metrics
+                done_units += 1
+
+                # Persist after every condition: a preempted instance keeps its aggregates.
+                _write_summary(model_dir, all_summary)
+                elapsed_total = time.time() - t_start
+                eta_s = (elapsed_total / done_units) * (total_units - done_units) if done_units else 0
+                logger.info(
+                    "  Progress %d/%d conditions | elapsed %.1fh | ETA %.1fh%s",
+                    done_units,
+                    total_units,
+                    elapsed_total / 3600,
+                    eta_s / 3600,
                     _cost_note(elapsed_total, args.cost_per_hour),
                 )
-                break
-
-            logger.info("  Running %s ...", cond)
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.reset_peak_memory_stats()
-
-            try:
-                metrics = run_condition(
-                    model=model,
-                    input_builder=input_builder,
-                    dataset=dataset,
-                    cond_name=cond,
-                    ds_dir=ds_dir,
-                    force_rerun=args.force_rerun,
-                    index_len=args.index_len,
-                    max_new_tokens=args.max_new_tokens,
-                    sample_timeout_s=args.sample_timeout,
-                    beam_size=args.beam_size,
-                    trace=args.trace,
-                    collect_metrics=args.collect_metrics,
+                _write_status(
+                    model_dir,
+                    state="running",
+                    pid=os.getpid(),
+                    host=socket.gethostname(),
+                    total_units=total_units,
+                    completed_units=done_units,
+                    last_condition=f"{ds_name}|{cond}",
+                    elapsed_h=round(elapsed_total / 3600, 2),
+                    eta_h=round(eta_s / 3600, 2),
+                    est_cost_usd=round(elapsed_total / 3600 * args.cost_per_hour, 2)
+                    if args.cost_per_hour > 0
+                    else None,
+                    model=model_path,
                 )
-            except KeyboardInterrupt:
-                _write_summary(output_base, all_summary)
-                raise
-            except Exception:
-                # One broken condition must not cost the whole rental.
-                logger.exception(
-                    "Condition %s on %s failed — continuing with the rest", cond, ds_name
-                )
-                metrics = {
-                    "condition": cond,
-                    "n": 0,
-                    "hits": 0,
-                    "hit_at_1": 0.0,
-                    "time_s": 0,
-                    "n_dead_ends": 0,
-                    "n_skipped": 0,
-                    "error": "see run.log",
-                }
 
-            if torch.cuda.is_available():
-                metrics["peak_vram_gb"] = round(torch.cuda.max_memory_allocated() / 1e9, 2)
-
-            all_summary[(ds_name, cond)] = metrics
-            done_units += 1
-
-            # Persist after every condition: a preempted instance keeps its aggregates.
-            _write_summary(output_base, all_summary)
-            elapsed_total = time.time() - t_start
-            eta_s = (elapsed_total / done_units) * (total_units - done_units) if done_units else 0
-            logger.info(
-                "  Progress %d/%d conditions | elapsed %.1fh | ETA %.1fh%s",
-                done_units,
-                total_units,
-                elapsed_total / 3600,
-                eta_s / 3600,
-                _cost_note(elapsed_total, args.cost_per_hour),
-            )
-            _write_status(
-                output_base,
-                state="running",
-                pid=os.getpid(),
-                host=socket.gethostname(),
-                total_units=total_units,
-                completed_units=done_units,
-                last_condition=f"{ds_name}|{cond}",
-                elapsed_h=round(elapsed_total / 3600, 2),
-                eta_h=round(eta_s / 3600, 2),
-                est_cost_usd=round(elapsed_total / 3600 * args.cost_per_hour, 2)
-                if args.cost_per_hour > 0
-                else None,
-            )
-
-    logger.info("=" * 80)
-    logger.info("%s", "FINAL RESULTS".center(80))
-    logger.info("=" * 80)
-    logger.info(
-        "%-15s %-20s %6s %8s %8s %8s %8s %8s",
-        "Dataset",
-        "Condition",
-        "N",
-        "Hits@1",
-        "Hit%",
-        "Time",
-        "DeadEnd",
-        "Skip",
-    )
-    logger.info("-" * 80)
-    for (ds, cond), m in all_summary.items():
+        logger.info("=" * 80)
+        logger.info("%s", "FINAL RESULTS".center(80))
+        logger.info("=" * 80)
         logger.info(
-            "%-15s %-20s %6d %8d %7.1f%% %7.0fs %8d %8d",
-            ds,
-            cond,
-            m["n"],
-            m["hits"],
-            m["hit_at_1"],
-            m["time_s"],
-            m["n_dead_ends"],
-            m["n_skipped"],
+            "%-15s %-20s %6s %8s %8s %8s %8s %8s",
+            "Dataset",
+            "Condition",
+            "N",
+            "Hits@1",
+            "Hit%",
+            "Time",
+            "DeadEnd",
+            "Skip",
         )
-        if m.get("error"):
-            logger.info("%15s (FAILED — %s)", "", m["error"])
-        if "reduction_pct" in m:
+        logger.info("-" * 80)
+        for (ds, cond), m in all_summary.items():
             logger.info(
-                "%15s (paths: %d/%d, -%.1f%%)",
-                "",
-                m["total_paths_filtered"],
-                m["total_paths_all"],
-                m["reduction_pct"],
+                "%-15s %-20s %6d %8d %7.1f%% %7.0fs %8d %8d",
+                ds,
+                cond,
+                m["n"],
+                m["hits"],
+                m["hit_at_1"],
+                m["time_s"],
+                m["n_dead_ends"],
+                m["n_skipped"],
             )
-        if "avg_candidates_materialised" in m:
-            logger.info(
-                "%15s (lazy: %.1f candidates over %.1f frontiers per question)",
-                "",
-                m["avg_candidates_materialised"],
-                m["avg_frontier_builds"],
+            if m.get("error"):
+                logger.info("%15s (FAILED — %s)", "", m["error"])
+            if "reduction_pct" in m:
+                logger.info(
+                    "%15s (paths: %d/%d, -%.1f%%)",
+                    "",
+                    m["total_paths_filtered"],
+                    m["total_paths_all"],
+                    m["reduction_pct"],
+                )
+            if "avg_candidates_materialised" in m:
+                logger.info(
+                    "%15s (lazy: %.1f candidates over %.1f frontiers per question)",
+                    "",
+                    m["avg_candidates_materialised"],
+                    m["avg_frontier_builds"],
+                )
+        logger.info("=" * 80)
+
+        total_elapsed = time.time() - t_start
+        logger.info(
+            "Total wall time for this model: %.2fh%s",
+            total_elapsed / 3600,
+            _cost_note(total_elapsed, args.cost_per_hour),
+        )
+        if stopped_early:
+            logger.warning(
+                "Run incomplete (%s) — rerun with the same output dir to finish.", stopped_early
             )
+
+        _write_summary(model_dir, all_summary)
+        _write_status(
+            model_dir,
+            state="stopped_early" if stopped_early else "done",
+            total_units=total_units,
+            completed_units=done_units,
+            elapsed_h=round(total_elapsed / 3600, 2),
+            est_cost_usd=round(total_elapsed / 3600 * args.cost_per_hour, 2)
+            if args.cost_per_hour > 0
+            else None,
+            model=model_path,
+        )
+        logger.info("Results for this model saved to %s", model_dir)
+
+        # Free the GPU before loading the next model.
+        if torch.cuda.is_available():
+            del model
+            torch.cuda.empty_cache()
+
     logger.info("=" * 80)
-
-    total_elapsed = time.time() - t_start
-    logger.info(
-        "Total wall time: %.2fh%s",
-        total_elapsed / 3600,
-        _cost_note(total_elapsed, args.cost_per_hour),
-    )
-    if stopped_early:
-        logger.warning(
-            "Run incomplete (%s) — rerun with the same output dir to finish.", stopped_early
-        )
-
-    _write_summary(output_base, all_summary)
-    _write_status(
-        output_base,
-        state="stopped_early" if stopped_early else "done",
-        total_units=total_units,
-        completed_units=done_units,
-        elapsed_h=round(total_elapsed / 3600, 2),
-        est_cost_usd=round(total_elapsed / 3600 * args.cost_per_hour, 2)
-        if args.cost_per_hour > 0
-        else None,
-    )
+    logger.info("ALL MODELS DONE — %d models in %.2fh", total_models, (time.time() - t_total) / 3600)
     logger.info("Results saved to %s", output_base)
 
 
